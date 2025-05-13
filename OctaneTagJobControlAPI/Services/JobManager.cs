@@ -315,9 +315,7 @@ namespace OctaneTagJobControlAPI.Services
 
         #region Private Methods
 
-        /// <summary>
-        /// Create a job strategy instance from the configuration
-        /// </summary>
+        // Excerpt from JobManager.cs - CreateJobStrategyAsync method update
         private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config)
         {
             try
@@ -337,24 +335,42 @@ namespace OctaneTagJobControlAPI.Services
                 // Convert the reader settings to the format expected by the strategy
                 var readerSettings = ConvertReaderSettings(config.ReaderSettings);
 
-                // Extract parameters
-                string hostname = config.ReaderSettings.Writer.Hostname;
-                string detectorHostname = config.ReaderSettings.Detector.Hostname;
-                string verifierHostname = config.ReaderSettings.Verifier.Hostname;
+                // Extract common parameters
                 string logFilePath = config.LogFilePath;
 
                 // Extract additional parameters that might be needed by specific strategies
                 config.Parameters.TryGetValue("epcHeader", out var epcHeader);
                 config.Parameters.TryGetValue("sku", out var sku);
+                config.Parameters.TryGetValue("encodingMethod", out var encodingMethod);
+
+                // Parse SGTIN-96 specific parameters
+                int partitionValue = 6; // Default value
+                if (config.Parameters.TryGetValue("partitionValue", out var partitionStr) &&
+                    int.TryParse(partitionStr, out int parsedPartition))
+                {
+                    partitionValue = parsedPartition;
+                }
+
+                int itemReference = 0; // Default value
+                if (config.Parameters.TryGetValue("itemReference", out var itemRefStr) &&
+                    int.TryParse(itemRefStr, out int parsedItemRef))
+                {
+                    itemReference = parsedItemRef;
+                }
 
                 // Create the strategy instance based on the type
                 if (strategyType == typeof(JobStrategy8MultipleReaderEnduranceStrategy) ||
                     strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
                 {
+                    // This strategy uses three different readers
+                    string detectorHostname = config.ReaderSettings.Detector.Hostname;
+                    string writerHostname = config.ReaderSettings.Writer.Hostname;
+                    string verifierHostname = config.ReaderSettings.Verifier.Hostname;
+
                     return (IJobStrategy)Activator.CreateInstance(
                         strategyType,
                         detectorHostname,
-                        hostname,
+                        writerHostname,
                         verifierHostname,
                         logFilePath,
                         readerSettings);
@@ -362,17 +378,24 @@ namespace OctaneTagJobControlAPI.Services
                 else if (strategyType == typeof(JobStrategy9CheckBox) ||
                          strategyType.Name == "JobStrategy9CheckBox")
                 {
+                    // This strategy only uses one reader (the writer hostname)
+                    string hostname = config.ReaderSettings.Writer.Hostname;
+
                     return (IJobStrategy)Activator.CreateInstance(
                         strategyType,
                         hostname,
                         logFilePath,
                         readerSettings,
                         epcHeader,
-                        sku);
+                        sku,
+                        encodingMethod,
+                        partitionValue,
+                        itemReference);
                 }
                 else
                 {
                     // Default constructor pattern for most strategies
+                    string hostname = config.ReaderSettings.Writer.Hostname;
                     return (IJobStrategy)Activator.CreateInstance(
                         strategyType,
                         hostname,
