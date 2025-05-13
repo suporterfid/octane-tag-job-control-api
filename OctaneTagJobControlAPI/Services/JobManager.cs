@@ -13,6 +13,8 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using OctaneTagJobControlAPI.Strategies;
+using OctaneTagJobControlAPI.Extensions;
+using OctaneTagJobControlAPI.JobStrategies.Base;
 
 namespace OctaneTagJobControlAPI.Services
 {
@@ -414,85 +416,28 @@ namespace OctaneTagJobControlAPI.Services
         /// <summary>
         /// Convert our API ReaderSettings to the Dictionary format expected by the strategies
         /// </summary>
-        private Dictionary<string, OctaneTagWritingTest.ReaderSettings> ConvertReaderSettings(
-            ReaderSettingsGroup settingsGroup)
+        private Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> ConvertReaderSettings(
+     ReaderSettingsGroup settingsGroup)
         {
-            var result = new Dictionary<string, OctaneTagWritingTest.ReaderSettings>();
+            var result = new Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings>();
 
             // Convert Detector settings
-            var detector = new OctaneTagWritingTest.ReaderSettings
+            if (settingsGroup.Detector != null)
             {
-                Name = "detector",
-                Hostname = settingsGroup.Detector.Hostname,
-                IncludeFastId = settingsGroup.Detector.IncludeFastId,
-                IncludePeakRssi = settingsGroup.Detector.IncludePeakRssi,
-                IncludeAntennaPortNumber = settingsGroup.Detector.IncludeAntennaPortNumber,
-                ReportMode = settingsGroup.Detector.ReportMode,
-                RfMode = settingsGroup.Detector.RfMode,
-                AntennaPort = settingsGroup.Detector.AntennaPort,
-                TxPowerInDbm = settingsGroup.Detector.TxPowerInDbm,
-                MaxRxSensitivity = settingsGroup.Detector.MaxRxSensitivity,
-                RxSensitivityInDbm = settingsGroup.Detector.RxSensitivityInDbm,
-                SearchMode = settingsGroup.Detector.SearchMode,
-                Session = settingsGroup.Detector.Session,
-                MemoryBank = settingsGroup.Detector.MemoryBank,
-                BitPointer = settingsGroup.Detector.BitPointer,
-                TagMask = settingsGroup.Detector.TagMask,
-                BitCount = settingsGroup.Detector.BitCount,
-                FilterOp = settingsGroup.Detector.FilterOp,
-                FilterMode = settingsGroup.Detector.FilterMode
-            };
-            result["detector"] = detector;
+                result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
+            }
 
             // Convert Writer settings
-            var writer = new OctaneTagWritingTest.ReaderSettings
+            if (settingsGroup.Writer != null)
             {
-                Name = "writer",
-                Hostname = settingsGroup.Writer.Hostname,
-                IncludeFastId = settingsGroup.Writer.IncludeFastId,
-                IncludePeakRssi = settingsGroup.Writer.IncludePeakRssi,
-                IncludeAntennaPortNumber = settingsGroup.Writer.IncludeAntennaPortNumber,
-                ReportMode = settingsGroup.Writer.ReportMode,
-                RfMode = settingsGroup.Writer.RfMode,
-                AntennaPort = settingsGroup.Writer.AntennaPort,
-                TxPowerInDbm = settingsGroup.Writer.TxPowerInDbm,
-                MaxRxSensitivity = settingsGroup.Writer.MaxRxSensitivity,
-                RxSensitivityInDbm = settingsGroup.Writer.RxSensitivityInDbm,
-                SearchMode = settingsGroup.Writer.SearchMode,
-                Session = settingsGroup.Writer.Session,
-                MemoryBank = settingsGroup.Writer.MemoryBank,
-                BitPointer = settingsGroup.Writer.BitPointer,
-                TagMask = settingsGroup.Writer.TagMask,
-                BitCount = settingsGroup.Writer.BitCount,
-                FilterOp = settingsGroup.Writer.FilterOp,
-                FilterMode = settingsGroup.Writer.FilterMode
-            };
-            result["writer"] = writer;
+                result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
+            }
 
             // Convert Verifier settings
-            var verifier = new OctaneTagWritingTest.ReaderSettings
+            if (settingsGroup.Verifier != null)
             {
-                Name = "verifier",
-                Hostname = settingsGroup.Verifier.Hostname,
-                IncludeFastId = settingsGroup.Verifier.IncludeFastId,
-                IncludePeakRssi = settingsGroup.Verifier.IncludePeakRssi,
-                IncludeAntennaPortNumber = settingsGroup.Verifier.IncludeAntennaPortNumber,
-                ReportMode = settingsGroup.Verifier.ReportMode,
-                RfMode = settingsGroup.Verifier.RfMode,
-                AntennaPort = settingsGroup.Verifier.AntennaPort,
-                TxPowerInDbm = settingsGroup.Verifier.TxPowerInDbm,
-                MaxRxSensitivity = settingsGroup.Verifier.MaxRxSensitivity,
-                RxSensitivityInDbm = settingsGroup.Verifier.RxSensitivityInDbm,
-                SearchMode = settingsGroup.Verifier.SearchMode,
-                Session = settingsGroup.Verifier.Session,
-                MemoryBank = settingsGroup.Verifier.MemoryBank,
-                BitPointer = settingsGroup.Verifier.BitPointer,
-                TagMask = settingsGroup.Verifier.TagMask,
-                BitCount = settingsGroup.Verifier.BitCount,
-                FilterOp = settingsGroup.Verifier.FilterOp,
-                FilterMode = settingsGroup.Verifier.FilterMode
-            };
-            result["verifier"] = verifier;
+                result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
+            }
 
             return result;
         }

@@ -99,6 +99,8 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 throw new ArgumentException($"No settings found for role: {role}");
             }
+
+            // Either use the existing settings or convert if needed
             return settings[role];
         }
 

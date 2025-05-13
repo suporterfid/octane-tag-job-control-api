@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace OctaneTagWritingTest
 {
-    public class ReaderSettings
+    public class RfidDeviceSettings
     {
         private string name;
         public string Name 
@@ -37,9 +37,9 @@ namespace OctaneTagWritingTest
         public string FilterOp { get; set; }
         public string FilterMode { get; set; }
 
-        public ReaderSettings Clone()
+        public RfidDeviceSettings Clone()
         {
-            return JsonSerializer.Deserialize<ReaderSettings>(
+            return JsonSerializer.Deserialize<RfidDeviceSettings>(
                 JsonSerializer.Serialize(this)
             );
         }
@@ -50,20 +50,20 @@ namespace OctaneTagWritingTest
             File.WriteAllText(filePath, json);
         }
 
-        public static ReaderSettings Load(string filePath)
+        public static RfidDeviceSettings Load(string filePath)
         {
             if (File.Exists(filePath))
             {
                 var json = File.ReadAllText(filePath);
-                return JsonSerializer.Deserialize<ReaderSettings>(json);
+                return JsonSerializer.Deserialize<RfidDeviceSettings>(json);
             }
             return null;
         }
 
         // Helper method to create settings with a name
-        public static ReaderSettings CreateNamed(string name)
+        public static RfidDeviceSettings CreateNamed(string name)
         {
-            return new ReaderSettings { Name = name };
+            return new RfidDeviceSettings { Name = name };
         }
     }
 }
