@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "EpcListGenerator": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker",
+      "commandLineArgs": "B071 99999999999999 10"
+    }
+  }
+}

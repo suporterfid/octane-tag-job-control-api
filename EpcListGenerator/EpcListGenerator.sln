@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35728.132 d17.12
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EpcListGenerator", "EpcListGenerator.csproj", "{5E977225-FB74-41B0-82F3-5E985E47D539}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TagUtils", "..\TagUtils\TagUtils.csproj", "{6890F730-1411-4C86-A21E-778287247E1F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5E977225-FB74-41B0-82F3-5E985E47D539}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E977225-FB74-41B0-82F3-5E985E47D539}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E977225-FB74-41B0-82F3-5E985E47D539}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E977225-FB74-41B0-82F3-5E985E47D539}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6890F730-1411-4C86-A21E-778287247E1F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6890F730-1411-4C86-A21E-778287247E1F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6890F730-1411-4C86-A21E-778287247E1F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6890F730-1411-4C86-A21E-778287247E1F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

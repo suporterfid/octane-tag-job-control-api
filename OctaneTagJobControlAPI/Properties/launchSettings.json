@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "OctaneTagWritingTest": {
+      "commandName": "Project",
+      "commandLineArgs": "192.168.68.248 192.168.68.94"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker",
+      "commandLineArgs": "192.168.68.248  192.168.68.94"
+    }
+  }
+}

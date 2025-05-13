@@ -1,0 +1,549 @@
+﻿// OctaneTagJobControlAPI/Services/JobManager.cs
+using OctaneTagJobControlAPI.Models;
+using OctaneTagJobControlAPI.Repositories;
+using OctaneTagWritingTest;
+using OctaneTagWritingTest.JobStrategies;
+using OctaneTagWritingTest.Helpers;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace OctaneTagJobControlAPI.Services
+{
+    /// <summary>
+    /// Manages job execution and status tracking
+    /// </summary>
+    public class JobManager
+    {
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellationTokens = new();
+        private readonly ConcurrentDictionary<string, Task> _jobTasks = new();
+        private readonly ConcurrentDictionary<string, IJobStrategy> _jobStrategies = new();
+        private readonly ILogger<JobManager> _logger;
+        private readonly IJobRepository _jobRepository;
+        private readonly IConfigurationRepository _configRepository;
+
+        public JobManager(
+            ILogger<JobManager> logger,
+            IJobRepository jobRepository,
+            IConfigurationRepository configRepository)
+        {
+            _logger = logger;
+            _jobRepository = jobRepository;
+            _configRepository = configRepository;
+        }
+
+        /// <summary>
+        /// Get all available job strategies that can be executed
+        /// </summary>
+        public Dictionary<string, string> GetAvailableStrategies()
+        {
+            var strategies = new Dictionary<string, string>();
+
+            // Find all job strategy classes in the assembly
+            var jobTypes = Assembly.GetAssembly(typeof(IJobStrategy))
+                ?.GetTypes()
+                .Where(t => t.IsClass && !t.IsAbstract && typeof(IJobStrategy).IsAssignableFrom(t));
+
+            if (jobTypes != null)
+            {
+                foreach (var jobType in jobTypes)
+                {
+                    strategies[jobType.Name] = jobType.FullName;
+                }
+            }
+
+            return strategies;
+        }
+
+        /// <summary>
+        /// Register a new job using the given configuration
+        /// </summary>
+        public async Task<string> RegisterJobAsync(JobConfiguration config)
+        {
+            var jobId = await _jobRepository.CreateJobAsync(config);
+
+            _logger.LogInformation("Registered new job: {JobId}, {JobName}, Strategy: {Strategy}",
+                jobId, config.Name, config.StrategyType);
+
+            return jobId;
+        }
+
+        /// <summary>
+        /// Start a job with the given ID
+        /// </summary>
+        public async Task<bool> StartJobAsync(string jobId, int timeoutSeconds = 300)
+        {
+            // Get the job status and configuration
+            var status = await _jobRepository.GetJobStatusAsync(jobId);
+            if (status == null)
+            {
+                _logger.LogError("Cannot start job {JobId}: Job not found", jobId);
+                return false;
+            }
+
+            var config = await _configRepository.GetConfigurationAsync(status.ConfigurationId);
+            if (config == null)
+            {
+                status.State = JobState.Failed;
+                status.ErrorMessage = $"Failed to find configuration with ID {status.ConfigurationId}";
+                await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                _logger.LogError("Cannot start job {JobId}: Configuration not found", jobId);
+                return false;
+            }
+
+            if (_jobTasks.ContainsKey(jobId) && !_jobTasks[jobId].IsCompleted)
+            {
+                _logger.LogWarning("Cannot start job {JobId}: Job is already running", jobId);
+                return false;
+            }
+
+            try
+            {
+                // Update status
+                status.State = JobState.Running;
+                status.StartTime = DateTime.UtcNow;
+                status.EndTime = null;
+                status.CurrentOperation = "Starting";
+                status.ProgressPercentage = 0;
+                status.TotalTagsProcessed = 0;
+                status.SuccessCount = 0;
+                status.FailureCount = 0;
+                status.ErrorMessage = string.Empty;
+
+                await _jobRepository.UpdateJobStatusAsync(jobId, status);
+
+                // Create cancellation token
+                var cts = new CancellationTokenSource();
+                _cancellationTokens[jobId] = cts;
+
+                // Create timeout token
+                cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+                // Create and configure strategy
+                var strategy = await CreateJobStrategyAsync(config);
+                if (strategy == null)
+                {
+                    status.State = JobState.Failed;
+                    status.ErrorMessage = $"Failed to create strategy of type {config.StrategyType}";
+                    await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                    return false;
+                }
+
+                _jobStrategies[jobId] = strategy;
+
+                // Start the job in a background task
+                var task = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Log job start
+                        await _jobRepository.AddJobLogEntryAsync(jobId, $"Starting job '{status.JobName}' using strategy '{config.StrategyType}'");
+
+                        // Hook up progress monitoring
+                        TagOpController.Instance.CleanUp();
+
+                        // Start the strategy
+                        strategy.RunJob(cts.Token);
+
+                        // Update completion status
+                        if (!cts.Token.IsCancellationRequested)
+                        {
+                            status.State = JobState.Completed;
+                            status.EndTime = DateTime.UtcNow;
+                            status.CurrentOperation = "Completed";
+                            status.ProgressPercentage = 100;
+
+                            await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                            await _jobRepository.AddJobLogEntryAsync(jobId, "Job completed successfully");
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        status.State = JobState.Canceled;
+                        status.EndTime = DateTime.UtcNow;
+                        status.CurrentOperation = "Canceled";
+
+                        await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                        await _jobRepository.AddJobLogEntryAsync(jobId, "Job was canceled");
+                    }
+                    catch (Exception ex)
+                    {
+                        status.State = JobState.Failed;
+                        status.EndTime = DateTime.UtcNow;
+                        status.CurrentOperation = "Failed";
+                        status.ErrorMessage = ex.Message;
+
+                        await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                        await _jobRepository.AddJobLogEntryAsync(jobId, $"Job failed with error: {ex.Message}");
+
+                        _logger.LogError(ex, "Error executing job {JobId}", jobId);
+                    }
+                }, cts.Token);
+
+                _jobTasks[jobId] = task;
+
+                // Start a timer to update status periodically
+                _ = StartStatusUpdateTimerAsync(jobId, cts.Token);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to start job {JobId}", jobId);
+
+                status.State = JobState.Failed;
+                status.ErrorMessage = ex.Message;
+                await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                await _jobRepository.AddJobLogEntryAsync(jobId, $"Failed to start job: {ex.Message}");
+
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Stop a running job
+        /// </summary>
+        public async Task<bool> StopJobAsync(string jobId)
+        {
+            if (!_cancellationTokens.TryGetValue(jobId, out var cts))
+            {
+                return false;
+            }
+
+            try
+            {
+                cts.Cancel();
+
+                var status = await _jobRepository.GetJobStatusAsync(jobId);
+                if (status != null)
+                {
+                    status.State = JobState.Canceled;
+                    status.EndTime = DateTime.UtcNow;
+                    status.CurrentOperation = "Canceled by user";
+
+                    await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                    await _jobRepository.AddJobLogEntryAsync(jobId, "Job was canceled by user");
+                }
+
+                _logger.LogInformation("Job {JobId} canceled by user", jobId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error stopping job {JobId}", jobId);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Get the current status of a job
+        /// </summary>
+        public async Task<JobStatus> GetJobStatusAsync(string jobId)
+        {
+            return await _jobRepository.GetJobStatusAsync(jobId);
+        }
+
+        /// <summary>
+        /// Get the status of all registered jobs
+        /// </summary>
+        public async Task<List<JobStatus>> GetAllJobStatusesAsync()
+        {
+            return await _jobRepository.GetAllJobStatusesAsync();
+        }
+
+        /// <summary>
+        /// Get the configuration of a job
+        /// </summary>
+        public async Task<JobConfiguration> GetJobConfigurationAsync(string jobId)
+        {
+            var status = await _jobRepository.GetJobStatusAsync(jobId);
+            if (status == null || string.IsNullOrEmpty(status.ConfigurationId))
+            {
+                return null;
+            }
+
+            return await _configRepository.GetConfigurationAsync(status.ConfigurationId);
+        }
+
+        /// <summary>
+        /// Get log entries for a job
+        /// </summary>
+        public async Task<List<string>> GetJobLogEntriesAsync(string jobId, int maxEntries = 100)
+        {
+            return await _jobRepository.GetJobLogEntriesAsync(jobId, maxEntries);
+        }
+
+        /// <summary>
+        /// Get metrics for a job
+        /// </summary>
+        public async Task<Dictionary<string, object>> GetJobMetricsAsync(string jobId)
+        {
+            return await _jobRepository.GetJobMetricsAsync(jobId);
+        }
+
+        /// <summary>
+        /// Clean up completed or failed jobs
+        /// </summary>
+        public void CleanupJobs()
+        {
+            foreach (var jobId in _jobTasks.Keys.ToList())
+            {
+                // Check if the task has completed
+                if (_jobTasks.TryGetValue(jobId, out var task) && task.IsCompleted)
+                {
+                    // Remove task and CTS
+                    _jobTasks.TryRemove(jobId, out _);
+
+                    if (_cancellationTokens.TryRemove(jobId, out var cts))
+                    {
+                        cts.Dispose();
+                    }
+
+                    if (_jobStrategies.TryRemove(jobId, out var strategy))
+                    {
+                        // Clean up strategy resources if applicable
+                        (strategy as IDisposable)?.Dispose();
+                    }
+                }
+            }
+        }
+
+        #region Private Methods
+
+        /// <summary>
+        /// Create a job strategy instance from the configuration
+        /// </summary>
+        private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config)
+        {
+            try
+            {
+                // Find strategy type
+                var strategyType = GetAvailableStrategies()
+                    .Where(s => s.Key == config.StrategyType)
+                    .Select(s => Type.GetType(s.Value))
+                    .FirstOrDefault();
+
+                if (strategyType == null)
+                {
+                    _logger.LogError("Strategy type {StrategyType} not found", config.StrategyType);
+                    return null;
+                }
+
+                // Convert the reader settings to the format expected by the strategy
+                var readerSettings = ConvertReaderSettings(config.ReaderSettings);
+
+                // Extract parameters
+                string hostname = config.ReaderSettings.Writer.Hostname;
+                string detectorHostname = config.ReaderSettings.Detector.Hostname;
+                string verifierHostname = config.ReaderSettings.Verifier.Hostname;
+                string logFilePath = config.LogFilePath;
+
+                // Extract additional parameters that might be needed by specific strategies
+                config.Parameters.TryGetValue("epcHeader", out var epcHeader);
+                config.Parameters.TryGetValue("sku", out var sku);
+
+                // Create the strategy instance based on the type
+                if (strategyType == typeof(JobStrategy8MultipleReaderEnduranceStrategy) ||
+                    strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
+                {
+                    return (IJobStrategy)Activator.CreateInstance(
+                        strategyType,
+                        detectorHostname,
+                        hostname,
+                        verifierHostname,
+                        logFilePath,
+                        readerSettings);
+                }
+                else if (strategyType == typeof(JobStrategy9CheckBox) ||
+                         strategyType.Name == "JobStrategy9CheckBox")
+                {
+                    return (IJobStrategy)Activator.CreateInstance(
+                        strategyType,
+                        hostname,
+                        logFilePath,
+                        readerSettings,
+                        epcHeader,
+                        sku);
+                }
+                else
+                {
+                    // Default constructor pattern for most strategies
+                    return (IJobStrategy)Activator.CreateInstance(
+                        strategyType,
+                        hostname,
+                        logFilePath,
+                        readerSettings);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating strategy instance for {StrategyType}", config.StrategyType);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Convert our API ReaderSettings to the Dictionary format expected by the strategies
+        /// </summary>
+        private Dictionary<string, OctaneTagWritingTest.ReaderSettings> ConvertReaderSettings(
+            ReaderSettingsGroup settingsGroup)
+        {
+            var result = new Dictionary<string, OctaneTagWritingTest.ReaderSettings>();
+
+            // Convert Detector settings
+            var detector = new OctaneTagWritingTest.ReaderSettings
+            {
+                Name = "detector",
+                Hostname = settingsGroup.Detector.Hostname,
+                IncludeFastId = settingsGroup.Detector.IncludeFastId,
+                IncludePeakRssi = settingsGroup.Detector.IncludePeakRssi,
+                IncludeAntennaPortNumber = settingsGroup.Detector.IncludeAntennaPortNumber,
+                ReportMode = settingsGroup.Detector.ReportMode,
+                RfMode = settingsGroup.Detector.RfMode,
+                AntennaPort = settingsGroup.Detector.AntennaPort,
+                TxPowerInDbm = settingsGroup.Detector.TxPowerInDbm,
+                MaxRxSensitivity = settingsGroup.Detector.MaxRxSensitivity,
+                RxSensitivityInDbm = settingsGroup.Detector.RxSensitivityInDbm,
+                SearchMode = settingsGroup.Detector.SearchMode,
+                Session = settingsGroup.Detector.Session,
+                MemoryBank = settingsGroup.Detector.MemoryBank,
+                BitPointer = settingsGroup.Detector.BitPointer,
+                TagMask = settingsGroup.Detector.TagMask,
+                BitCount = settingsGroup.Detector.BitCount,
+                FilterOp = settingsGroup.Detector.FilterOp,
+                FilterMode = settingsGroup.Detector.FilterMode
+            };
+            result["detector"] = detector;
+
+            // Convert Writer settings
+            var writer = new OctaneTagWritingTest.ReaderSettings
+            {
+                Name = "writer",
+                Hostname = settingsGroup.Writer.Hostname,
+                IncludeFastId = settingsGroup.Writer.IncludeFastId,
+                IncludePeakRssi = settingsGroup.Writer.IncludePeakRssi,
+                IncludeAntennaPortNumber = settingsGroup.Writer.IncludeAntennaPortNumber,
+                ReportMode = settingsGroup.Writer.ReportMode,
+                RfMode = settingsGroup.Writer.RfMode,
+                AntennaPort = settingsGroup.Writer.AntennaPort,
+                TxPowerInDbm = settingsGroup.Writer.TxPowerInDbm,
+                MaxRxSensitivity = settingsGroup.Writer.MaxRxSensitivity,
+                RxSensitivityInDbm = settingsGroup.Writer.RxSensitivityInDbm,
+                SearchMode = settingsGroup.Writer.SearchMode,
+                Session = settingsGroup.Writer.Session,
+                MemoryBank = settingsGroup.Writer.MemoryBank,
+                BitPointer = settingsGroup.Writer.BitPointer,
+                TagMask = settingsGroup.Writer.TagMask,
+                BitCount = settingsGroup.Writer.BitCount,
+                FilterOp = settingsGroup.Writer.FilterOp,
+                FilterMode = settingsGroup.Writer.FilterMode
+            };
+            result["writer"] = writer;
+
+            // Convert Verifier settings
+            var verifier = new OctaneTagWritingTest.ReaderSettings
+            {
+                Name = "verifier",
+                Hostname = settingsGroup.Verifier.Hostname,
+                IncludeFastId = settingsGroup.Verifier.IncludeFastId,
+                IncludePeakRssi = settingsGroup.Verifier.IncludePeakRssi,
+                IncludeAntennaPortNumber = settingsGroup.Verifier.IncludeAntennaPortNumber,
+                ReportMode = settingsGroup.Verifier.ReportMode,
+                RfMode = settingsGroup.Verifier.RfMode,
+                AntennaPort = settingsGroup.Verifier.AntennaPort,
+                TxPowerInDbm = settingsGroup.Verifier.TxPowerInDbm,
+                MaxRxSensitivity = settingsGroup.Verifier.MaxRxSensitivity,
+                RxSensitivityInDbm = settingsGroup.Verifier.RxSensitivityInDbm,
+                SearchMode = settingsGroup.Verifier.SearchMode,
+                Session = settingsGroup.Verifier.Session,
+                MemoryBank = settingsGroup.Verifier.MemoryBank,
+                BitPointer = settingsGroup.Verifier.BitPointer,
+                TagMask = settingsGroup.Verifier.TagMask,
+                BitCount = settingsGroup.Verifier.BitCount,
+                FilterOp = settingsGroup.Verifier.FilterOp,
+                FilterMode = settingsGroup.Verifier.FilterMode
+            };
+            result["verifier"] = verifier;
+
+            return result;
+        }
+
+        /// <summary>
+        /// Start a timer to periodically update job status
+        /// </summary>
+        private async Task StartStatusUpdateTimerAsync(string jobId, CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    // Get current job status
+                    var status = await _jobRepository.GetJobStatusAsync(jobId);
+                    if (status == null || status.State != JobState.Running)
+                        break;
+
+                    // Update metrics from TagOpController
+                    status.TotalTagsProcessed = TagOpController.Instance.GetTotalReadCount();
+                    status.SuccessCount = TagOpController.Instance.GetSuccessCount();
+                    status.FailureCount = status.TotalTagsProcessed - status.SuccessCount;
+
+                    // Calculate progress percentage if possible
+                    if (status.TotalTagsProcessed > 0)
+                    {
+                        // Calculate progress based on processed vs success
+                        double processed = status.TotalTagsProcessed;
+                        double success = status.SuccessCount;
+
+                        status.ProgressPercentage = Math.Min(100, (success / processed) * 100);
+                    }
+
+                    // Update metrics
+                    var metrics = await _jobRepository.GetJobMetricsAsync(jobId) ?? new Dictionary<string, object>();
+
+                    metrics["memoryUsageMB"] = Math.Round(
+                        Process.GetCurrentProcess().WorkingSet64 / 1024.0 / 1024.0, 2);
+                    metrics["totalTagsProcessed"] = status.TotalTagsProcessed;
+                    metrics["successCount"] = status.SuccessCount;
+                    metrics["failureCount"] = status.FailureCount;
+                    metrics["elapsedSeconds"] = (DateTime.UtcNow - status.StartTime.Value).TotalSeconds;
+                    metrics["lastUpdated"] = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+
+                    // Calculate throughput
+                    if (status.StartTime.HasValue && status.TotalTagsProcessed > 0)
+                    {
+                        double elapsedSeconds = (DateTime.UtcNow - status.StartTime.Value).TotalSeconds;
+                        if (elapsedSeconds > 0)
+                        {
+                            metrics["tagsPerSecond"] = Math.Round(status.TotalTagsProcessed / elapsedSeconds, 2);
+                            metrics["successPerSecond"] = Math.Round(status.SuccessCount / elapsedSeconds, 2);
+                        }
+                    }
+
+                    // Save updated metrics
+                    await _jobRepository.UpdateJobMetricsAsync(jobId, metrics);
+
+                    // Save updated status
+                    await _jobRepository.UpdateJobStatusAsync(jobId, status);
+
+                    // Wait for next update (1 second)
+                    await Task.Delay(1000, token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is expected
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in status update timer for job {JobId}", jobId);
+                await _jobRepository.AddJobLogEntryAsync(jobId, $"Error updating status: {ex.Message}");
+            }
+        }
+        #endregion
+    }
+}
