@@ -1,12 +1,10 @@
-﻿// Controllers/StatusController.cs
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Services;
 using Microsoft.AspNetCore.Mvc;
-using OctaneTagJobControlAPI.Models;
 using OctaneTagWritingTest.Helpers;
 
 namespace OctaneTagJobControlAPI.Controllers
@@ -44,6 +42,7 @@ namespace OctaneTagJobControlAPI.Controllers
             var runningJobs = jobs.Count(j => j.State == JobState.Running);
             var completedJobs = jobs.Count(j => j.State == JobState.Completed);
             var failedJobs = jobs.Count(j => j.State == JobState.Failed);
+
             // Get tag statistics
             var totalTags = TagOpController.Instance.GetTotalReadCount();
             var successTags = TagOpController.Instance.GetSuccessCount();
@@ -169,7 +168,7 @@ namespace OctaneTagJobControlAPI.Controllers
 
         [HttpGet("metrics")]
         [ProducesResponseType(typeof(ApiResponse<Dictionary<string, object>>), StatusCodes.Status200OK)]
-        public IActionResult GetMetrics()
+        public async Task<IActionResult> GetMetrics()
         {
             var process = Process.GetCurrentProcess();
 
@@ -250,14 +249,14 @@ namespace OctaneTagJobControlAPI.Controllers
         [HttpGet("health")]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status503ServiceUnavailable)]
-        public IActionResult GetHealth()
+        public async Task<IActionResult> GetHealth()
         {
             try
             {
                 // Check system health conditions
                 bool isDiskHealthy = CheckDiskHealth();
                 bool isMemoryHealthy = CheckMemoryHealth();
-                bool isJobSystemHealthy = CheckJobSystemHealth();
+                bool isJobSystemHealthy = await CheckJobSystemHealthAsync();
 
                 var healthStatus = new
                 {
@@ -488,9 +487,9 @@ namespace OctaneTagJobControlAPI.Controllers
             return memoryUsageMB < maxHealthyMemoryMB;
         }
 
-        private bool CheckJobSystemHealth()
+        private async Task<bool> CheckJobSystemHealthAsync()
         {
-            var jobs = _jobManager.GetAllJobStatuses();
+            var jobs = await _jobManager.GetAllJobStatusesAsync();
 
             // Check for any jobs that have been running for too long (>24h)
             var longRunningJobs = jobs.Where(j =>
