@@ -24,10 +24,67 @@ namespace OctaneTagJobControlAPI.Controllers
 
         [HttpGet]
         [ProducesResponseType(typeof(List<JobStatus>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> GetAllJobs()
+        public async Task<IActionResult> GetAllJobs(
+    [FromQuery] string sortBy = "date",
+    [FromQuery] bool runningFirst = true)
         {
             var jobs = await _jobManager.GetAllJobStatusesAsync();
-            return Ok(jobs);
+
+            // If runningFirst is true, separate running jobs from non-running jobs
+            List<JobStatus> sortedJobs;
+
+            if (runningFirst)
+            {
+                var runningJobs = jobs.Where(j => j.State == JobState.Running).ToList();
+                var otherJobs = jobs.Where(j => j.State != JobState.Running).ToList();
+
+                // Apply sorting within each group
+                switch (sortBy.ToLower())
+                {
+                    case "name":
+                        runningJobs = runningJobs.OrderBy(j => j.JobName).ToList();
+                        otherJobs = otherJobs.OrderBy(j => j.JobName).ToList();
+                        break;
+                    case "status":
+                        runningJobs = runningJobs.OrderBy(j => j.State.ToString()).ToList();
+                        otherJobs = otherJobs.OrderBy(j => j.State.ToString()).ToList();
+                        break;
+                    case "progress":
+                        runningJobs = runningJobs.OrderByDescending(j => j.ProgressPercentage).ToList();
+                        otherJobs = otherJobs.OrderByDescending(j => j.ProgressPercentage).ToList();
+                        break;
+                    case "date":
+                    default:
+                        runningJobs = runningJobs.OrderByDescending(j => j.StartTime ?? DateTime.MinValue).ToList();
+                        otherJobs = otherJobs.OrderByDescending(j => j.StartTime ?? DateTime.MinValue).ToList();
+                        break;
+                }
+
+                // Combine the lists: running jobs first, then the rest
+                sortedJobs = runningJobs.Concat(otherJobs).ToList();
+            }
+            else
+            {
+                // Apply sorting to all jobs without separating them
+                switch (sortBy.ToLower())
+                {
+                    case "name":
+                        sortedJobs = jobs.OrderBy(j => j.JobName).ToList();
+                        break;
+                    case "status":
+                        sortedJobs = jobs.OrderBy(j => j.State.ToString()).ToList();
+                        break;
+                    case "progress":
+                        sortedJobs = jobs.OrderByDescending(j => j.ProgressPercentage).ToList();
+                        break;
+                    case "date":
+                    default:
+                        sortedJobs = jobs.OrderByDescending(j => j.StartTime ?? DateTime.MinValue).ToList();
+                        break;
+                }
+            }
+
+            return Ok(sortedJobs);
         }
 
         [HttpGet("{jobId}")]
