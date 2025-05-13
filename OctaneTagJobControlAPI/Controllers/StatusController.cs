@@ -6,6 +6,7 @@ using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using OctaneTagWritingTest.Helpers;
+using System.IO;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
@@ -395,16 +396,16 @@ namespace OctaneTagJobControlAPI.Controllers
                     })
                     .ToList();
 
-                // Get files
-                var files = Directory.GetFiles(requestedPath)
-                    .Select(f =>
+                // Get files (fixed to avoid File method conflict)
+                var filesList = Directory.GetFiles(requestedPath)
+                    .Select(filePath =>
                     {
-                        var fileInfo = new FileInfo(f);
+                        var fileInfo = new FileInfo(filePath);
                         return new
                         {
-                            Name = Path.GetFileName(f),
+                            Name = Path.GetFileName(filePath),
                             Type = "File",
-                            Path = Path.GetRelativePath(basePath, f).Replace('\\', '/'),
+                            Path = Path.GetRelativePath(basePath, filePath).Replace('\\', '/'),
                             SizeBytes = fileInfo.Length,
                             SizeFormatted = FormatFileSize(fileInfo.Length),
                             LastModified = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
@@ -421,7 +422,7 @@ namespace OctaneTagJobControlAPI.Controllers
                         CurrentPath = path,
                         ParentPath = GetParentPath(path),
                         Directories = directories,
-                        Files = files
+                        Files = filesList  // Use the renamed variable here
                     }
                 });
             }
@@ -457,7 +458,8 @@ namespace OctaneTagJobControlAPI.Controllers
                 }
             }
 
-            return File.GetLastWriteTime(assembly.Location);
+            // Use fully qualified type name to avoid conflict with Controller.File method
+            return System.IO.File.GetLastWriteTime(assembly.Location);
         }
 
         private bool CheckDiskHealth()
