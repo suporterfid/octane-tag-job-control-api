@@ -319,6 +319,13 @@ namespace OctaneTagJobControlAPI.Services
         #region Private Methods
 
         // Excerpt from JobManager.cs - CreateJobStrategyAsync method update
+        // The main changes needed are in the CreateJobStrategyAsync method of the JobManager class
+        // This method is responsible for creating strategy instances with the appropriate parameters
+
+        // In OctaneTagJobControlAPI/Services/JobManager.cs
+        // Look for the CreateJobStrategyAsync method (around line 265)
+        // Update the method to extract lock/permalock parameters and pass them to CheckBoxStrategy
+
         private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config)
         {
             try
@@ -361,27 +368,70 @@ namespace OctaneTagJobControlAPI.Services
                     itemReference = parsedItemRef;
                 }
 
+                // Extract lock/permalock parameters
+                bool enableLock = false;
+                if (config.Parameters.TryGetValue("enableLock", out var lockStr))
+                {
+                    enableLock = bool.TryParse(lockStr, out bool parsedLock) ? parsedLock :
+                                 lockStr.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+
+                bool enablePermalock = false;
+                if (config.Parameters.TryGetValue("enablePermalock", out var permalockStr))
+                {
+                    enablePermalock = bool.TryParse(permalockStr, out bool parsedPermalock) ? parsedPermalock :
+                                     permalockStr.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Log the lock settings
+                _logger.LogInformation("Lock settings for strategy {StrategyType}: Lock={EnableLock}, Permalock={EnablePermalock}",
+                    config.StrategyType, enableLock, enablePermalock);
+
                 // Create the strategy instance based on the type
                 if (strategyType == typeof(MultiReaderEnduranceStrategy) ||
                     strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
-                {
-                    // This strategy uses three different readers
-                    string detectorHostname = config.ReaderSettings.Detector.Hostname;
-                    string writerHostname = config.ReaderSettings.Writer.Hostname;
-                    string verifierHostname = config.ReaderSettings.Verifier.Hostname;
+                                {
+                                    // This strategy uses three different readers
+                                    string detectorHostname = config.ReaderSettings.Detector.Hostname;
+                                    string writerHostname = config.ReaderSettings.Writer.Hostname;
+                                    string verifierHostname = config.ReaderSettings.Verifier.Hostname;
 
-                    return (IJobStrategy)Activator.CreateInstance(
-                        strategyType,
-                        detectorHostname,
-                        writerHostname,
-                        verifierHostname,
-                        logFilePath,
-                        readerSettings);
+                                    // Check if the strategy class has constructor parameters for lock/permalock
+                                    var constructor = strategyType.GetConstructor(new Type[] {
+                        typeof(string), typeof(string), typeof(string),
+                        typeof(string), typeof(Dictionary<string, ReaderSettings>),
+                        typeof(bool), typeof(bool) // Lock parameters
+                    });
+
+                    if (constructor != null)
+                    {
+                        // If the constructor accepts lock parameters, use them
+                        return (IJobStrategy)Activator.CreateInstance(
+                            strategyType,
+                            detectorHostname,
+                            writerHostname,
+                            verifierHostname,
+                            logFilePath,
+                            readerSettings,
+                            enableLock,
+                            enablePermalock);
+                    }
+                    else
+                    {
+                        // Use the standard constructor without lock parameters
+                        return (IJobStrategy)Activator.CreateInstance(
+                            strategyType,
+                            detectorHostname,
+                            writerHostname,
+                            verifierHostname,
+                            logFilePath,
+                            readerSettings);
+                    }
                 }
                 else if (strategyType == typeof(CheckBoxStrategy) ||
-                         strategyType.Name == "JobStrategy9CheckBox")
+                         strategyType.Name == "CheckBoxStrategy")
                 {
-                    // This strategy only uses one reader (the writer hostname)
+                    // This strategy only uses one reader (the writer hostname) but now needs lock parameters
                     string hostname = config.ReaderSettings.Writer.Hostname;
 
                     return (IJobStrategy)Activator.CreateInstance(
@@ -393,7 +443,9 @@ namespace OctaneTagJobControlAPI.Services
                         sku,
                         encodingMethod,
                         partitionValue,
-                        itemReference);
+                        itemReference,
+                        enableLock,         // Pass the enableLock parameter
+                        enablePermalock);   // Pass the enablePermalock parameter
                 }
                 else
                 {

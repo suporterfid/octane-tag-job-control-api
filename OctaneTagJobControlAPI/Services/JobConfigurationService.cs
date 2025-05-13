@@ -155,7 +155,9 @@ namespace OctaneTagJobControlAPI.Services
                         Parameters = new Dictionary<string, string>
                         {
                             { "epcHeader", "E7" },
-                            { "sku", "012345678901" }
+                            { "sku", "012345678901" },
+                            { "enableLock", "false" },
+                            { "enablePermalock", "false" }
                         },
                         ReaderSettings = new ReaderSettingsGroup
                         {
