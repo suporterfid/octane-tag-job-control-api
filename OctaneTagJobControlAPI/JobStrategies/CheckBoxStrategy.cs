@@ -8,11 +8,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Impinj.OctaneSdk;
 using Impinj.TagUtils;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration.StrategyConfiguration;
 using OctaneTagJobControlAPI.JobStrategies.Base;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using OctaneTagJobControlAPI.Models;
+using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
 
 namespace OctaneTagJobControlAPI.Strategies
 {
@@ -242,7 +242,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 Name = "CheckBoxStrategy",
                 Description = "Reads, encodes, and writes EPC data to tags in a checkbox-like flow controlled by GPI events",
                 Category = "Encoding",
-                ConfigurationType = typeof(JobStrategies.Base.Configuration.StrategyConfiguration.EncodingStrategyConfiguration),
+                ConfigurationType = typeof(EncodingStrategyConfiguration),
                 Capabilities = StrategyCapability.Reading | StrategyCapability.Writing |
                     StrategyCapability.Verification | StrategyCapability.Encoding,
                 RequiresMultipleReaders = false

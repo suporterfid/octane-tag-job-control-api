@@ -1,4 +1,4 @@
-﻿namespace OctaneTagJobControlAPI.JobStrategies.Base.Configuration.StrategyConfiguration
+﻿namespace OctaneTagJobControlAPI.JobStrategies.Base.Configuration
 {
     /// <summary>
     /// Configuration for encoding strategies

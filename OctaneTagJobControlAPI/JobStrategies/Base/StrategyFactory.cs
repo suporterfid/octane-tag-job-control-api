@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration.StrategyConfiguration;
 using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
 using OctaneTagJobControlAPI.JobStrategies.Base;
 using OctaneTagJobControlAPI.Models;
@@ -102,7 +101,7 @@ namespace OctaneTagJobControlAPI.Strategies
         /// </summary>
         private IJobStrategy CreateCheckBoxStrategy(Type strategyType, StrategyConfiguration config)
         {
-            if (!(config is JobStrategies.Base.Configuration.StrategyConfiguration.EncodingStrategyConfiguration encodingConfig))
+            if (!(config is EncodingStrategyConfiguration encodingConfig))
             {
                 throw new ArgumentException("CheckBoxStrategy requires EncodingStrategyConfiguration");
             }
@@ -249,7 +248,7 @@ namespace OctaneTagJobControlAPI.Strategies
             string typeName = strategyType.Name;
 
             if (typeName.Contains("CheckBox"))
-                return typeof(JobStrategies.Base.Configuration.StrategyConfiguration.EncodingStrategyConfiguration);
+                return typeof(EncodingStrategyConfiguration);
 
             if (typeName.Contains("ReadOnly") || typeName.Contains("Reading"))
                 return typeof(ReadOnlyStrategyConfiguration);
