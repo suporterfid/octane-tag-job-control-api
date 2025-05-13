@@ -24,8 +24,8 @@ A RESTful API service for managing and controlling RFID job operations. This API
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/rfid-job-control.git
-cd rfid-job-control
+git clone https://github.com/suporterfid/octane-tag-job-control-api
+cd octane-tag-job-control-api
 
 # Build the solution
 dotnet build
@@ -39,10 +39,10 @@ dotnet run
 
 ```bash
 # Build the Docker image
-docker build -t rfid-job-control .
+docker build -t octane-tag-job-control-api .
 
 # Run the container
-docker run -d -p 5000:5000 --name rfid-api rfid-job-control
+docker run -d -p 5000:5000 --name rfid-api octane-tag-job-control-api
 ```
 
 ### API Access
