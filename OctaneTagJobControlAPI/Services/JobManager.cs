@@ -2,7 +2,7 @@
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Repositories;
 using OctaneTagWritingTest;
-using OctaneTagWritingTest.JobStrategies;
+using OctaneTagJobControlAPI.JobStrategies;
 using OctaneTagWritingTest.Helpers;
 using System;
 using System.Collections.Concurrent;
@@ -359,7 +359,7 @@ namespace OctaneTagJobControlAPI.Services
                 }
 
                 // Create the strategy instance based on the type
-                if (strategyType == typeof(JobStrategy8MultipleReaderEnduranceStrategy) ||
+                if (strategyType == typeof(MultiReaderEnduranceStrategy) ||
                     strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
                 {
                     // This strategy uses three different readers
@@ -375,7 +375,7 @@ namespace OctaneTagJobControlAPI.Services
                         logFilePath,
                         readerSettings);
                 }
-                else if (strategyType == typeof(JobStrategy9CheckBox) ||
+                else if (strategyType == typeof(CheckBoxStrategy) ||
                          strategyType.Name == "JobStrategy9CheckBox")
                 {
                     // This strategy only uses one reader (the writer hostname)

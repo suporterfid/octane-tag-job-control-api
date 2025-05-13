@@ -1,4 +1,4 @@
-﻿using OctaneTagWritingTest.JobStrategies;
+﻿using OctaneTagJobControlAPI.JobStrategies;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,15 +23,15 @@ namespace OctaneTagWritingTest
             }
             
             strategies.Add("0", new JobStrategy0ReadOnlyLogging(hostnameWriter, $"TestCase0_ReadOnlyLogging_Log-{testDescription}.csv", readerSettings));
-            strategies.Add("1", new JobStrategy1SpeedStrategy(hostnameWriter, $"TestCase1_Log-SpeedStrategy-{testDescription}.csv", readerSettings));    
+            strategies.Add("1", new SpeedTestStrategy(hostnameWriter, $"TestCase1_Log-SpeedStrategy-{testDescription}.csv", readerSettings));    
             strategies.Add("2", new JobStrategy2MultiAntennaWriteStrategy(hostnameWriter, $"TestCase3_MultiAntenna_Log-{testDescription}.csv", readerSettings));
             strategies.Add("3", new JobStrategy3BatchSerializationPermalockStrategy(hostnameWriter, $"TestCase3_Log-BatchSerializationPermalockStrategy-{testDescription}.csv", readerSettings));
             strategies.Add("4", new JobStrategy4VerificationCycleStrategy(hostnameWriter, $"TestCase4_VerificationCycle_Log-{testDescription}.csv", readerSettings));
             strategies.Add("5", new JobStrategy5EnduranceStrategy(hostnameWriter, $"TestCase8_Endurance_Log-{testDescription}.csv", readerSettings));
             strategies.Add("6", new JobStrategy6RobustnessStrategy(hostnameWriter, $"TestCase6_Robustness_Log-{testDescription}.csv", readerSettings));
             strategies.Add("7", new JobStrategy7OptimizedStrategy(hostnameWriter, $"TestCase7_Log-OptimizedStrategy-{testDescription}.csv", readerSettings));
-            strategies.Add("8", new JobStrategy8MultipleReaderEnduranceStrategy(hostnameDetector, hostnameWriter, hostnameVerifier, $"TestCase8_Log-DualReaderEnduranceStrategy-{testDescription}.csv", readerSettings));
-            strategies.Add("9", new JobStrategy9CheckBox(hostnameWriter, $"TestCase9_Log-CheckBox-{testDescription}.csv", readerSettings, sku));
+            strategies.Add("8", new MultiReaderEnduranceStrategy(hostnameDetector, hostnameWriter, hostnameVerifier, $"TestCase8_Log-DualReaderEnduranceStrategy-{testDescription}.csv", readerSettings));
+            strategies.Add("9", new CheckBoxStrategy(hostnameWriter, $"TestCase9_Log-CheckBox-{testDescription}.csv", readerSettings, sku));
         }
 
         public void DisplayMenu()

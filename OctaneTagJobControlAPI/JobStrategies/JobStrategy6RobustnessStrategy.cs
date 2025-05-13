@@ -5,7 +5,7 @@ using System.Threading;
 using Impinj.OctaneSdk;
 using OctaneTagWritingTest.Helpers;
 
-namespace OctaneTagWritingTest.JobStrategies
+namespace OctaneTagJobControlAPI.JobStrategies
 {
     public class JobStrategy6RobustnessStrategy : BaseTestStrategy
     {

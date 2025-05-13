@@ -5,10 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Impinj.OctaneSdk;
+using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
+using OctaneTagJobControlAPI.JobStrategies.Base;
 using OctaneTagWritingTest.Helpers;
 using Org.LLRP.LTK.LLRPV1.Impinj;
+using OctaneTagJobControlAPI.Strategies.Base;
+using OctaneTagJobControlAPI.Models;
 
-namespace OctaneTagWritingTest.JobStrategies
+namespace OctaneTagJobControlAPI.JobStrategies
 {
     /// <summary>
     /// Dual-reader endurance strategy.
@@ -17,36 +21,30 @@ namespace OctaneTagWritingTest.JobStrategies
     /// comparing each tag’s EPC to its expected value; if a mismatch is found, it triggers a re-write
     /// using the expected EPC.
     /// </summary>
-    public class JobStrategy8MultipleReaderEnduranceStrategy : BaseTestStrategy
+    [StrategyDescription(
+    "Performs endurance testing using multiple readers for detection, writing, and verification",
+    "Advanced Testing",
+    StrategyCapability.Reading | StrategyCapability.Writing | StrategyCapability.Verification |
+    StrategyCapability.MultiReader | StrategyCapability.MultiAntenna)]
+    public class MultiReaderEnduranceStrategy : MultiReaderStrategyBase
     {
         private const int MaxCycles = 10000;
-        private readonly ConcurrentDictionary<string, int> cycleCount = new ConcurrentDictionary<string, int>();
-        private readonly ConcurrentDictionary<string, Stopwatch> swWriteTimers = new ConcurrentDictionary<string, Stopwatch>();
-        private readonly ConcurrentDictionary<string, Stopwatch> swVerifyTimers = new ConcurrentDictionary<string, Stopwatch>();
-
-        private ImpinjReader detectorReader;
-        // Two separate readers: one for writing and one for verifying.
-        private ImpinjReader writerReader;
-        private ImpinjReader verifierReader;
-        private string detectorAddress;
-        private string writerAddress;
-        private string verifierAddress;
-
+        private readonly ConcurrentDictionary<string, int> cycleCount = new();
+        private readonly ConcurrentDictionary<string, Stopwatch> swWriteTimers = new();
+        private readonly ConcurrentDictionary<string, Stopwatch> swVerifyTimers = new();
         private Timer successCountTimer;
+        private JobExecutionStatus status = new();
+        private readonly Stopwatch runTimer = new();
 
-        public JobStrategy8MultipleReaderEnduranceStrategy(string hostnameDetector, string hostnameWriter, string hostnameVerifier, string logFile, Dictionary<string, ReaderSettings> readerSettings)
-            : base(hostnameWriter, logFile, readerSettings)
+        public MultiReaderEnduranceStrategy(
+            string detectorHostname,
+            string writerHostname,
+            string verifierHostname,
+            string logFile,
+            Dictionary<string, ReaderSettings> readerSettings)
+            : base(detectorHostname, writerHostname, verifierHostname, logFile, readerSettings)
         {
-            detectorAddress = hostnameDetector;
-            writerAddress = hostnameWriter;
-            verifierAddress = hostnameVerifier;
-
-            detectorReader = new ImpinjReader();
-            // Create two separate reader instances.
-            writerReader = new ImpinjReader();
-            verifierReader = new ImpinjReader();
-
-            // Clean up any previous tag operation state.
+            status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
         }
 
@@ -55,289 +53,70 @@ namespace OctaneTagWritingTest.JobStrategies
             try
             {
                 this.cancellationToken = cancellationToken;
+                status.CurrentOperation = "Starting";
+                runTimer.Start();
+
                 Console.WriteLine("=== Multiple Reader Endurance Test ===");
                 Console.WriteLine("Press 'q' to stop the test and return to menu.");
 
                 // Configure readers.
-
                 try
                 {
                     ConfigureDetectorReader();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("ConfigureDetectorReader - Error: " + ex.Message);
-                    throw;
-                }
-
-                try
-                {
                     ConfigureWriterReader();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("ConfigureWriterReader - Error in dual reader endurance test: " + ex.Message);
-                    throw ex;
-                }
-                try
-                {
                     ConfigureVerifierReader();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("ConfigureVerifierReader - Error in dual reader endurance test: " + ex.Message);
-                    throw ex;
+                    status.CurrentOperation = "Configuration Error";
+                    Console.WriteLine($"Error configuring readers: {ex.Message}");
+                    throw;
                 }
 
-
-                // Register event handlers.
+                // Register event handlers
                 detectorReader.TagsReported += OnTagsReportedDetector;
-                // Register event handlers for the writer reader.
                 writerReader.TagsReported += OnTagsReportedWriter;
                 writerReader.TagOpComplete += OnTagOpComplete;
-
-                // Register event handlers for the verifier reader.
                 verifierReader.TagsReported += OnTagsReportedVerifier;
                 verifierReader.TagOpComplete += OnTagOpComplete;
 
-                // Start readers.
-                
-                try
-                {
-                    detectorReader.Start();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("detectorReader - Error in dual reader endurance test: " + ex.Message);
-                    throw ex;
-                }
-                try
-                {
-                    writerReader.Start();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("writerReader - Error in dual reader endurance test: " + ex.Message);
-                    throw ex;
-                }
-                try
-                {
-                    verifierReader.Start();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("verifierReader - Error in dual reader endurance test: " + ex.Message);
-                    throw ex;
-                }
-                
-                
-                
+                // Start readers
+                detectorReader.Start();
+                writerReader.Start();
+                verifierReader.Start();
 
-                // Create CSV header if the log file does not exist.
+                // Update status
+                status.CurrentOperation = "Running";
+
+                // Create CSV header if needed
                 if (!File.Exists(logFile))
                     LogToCsv("Timestamp,TID,Previous_EPC,Expected_EPC,Verified_EPC,WriteTime_ms,VerifyTime_ms,Result,CycleCount,RSSI,AntennaPort");
 
-                // Initialize and start the timer to log success count every 5 seconds
+                // Initialize success count timer
                 successCountTimer = new Timer(LogSuccessCount, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
 
-
-                while (!IsCancellationRequested())
+                while (!cancellationToken.IsCancellationRequested)
                 {
                     Thread.Sleep(100);
+                    status.RunTime = runTimer.Elapsed;
                 }
 
+                status.CurrentOperation = "Stopping";
                 Console.WriteLine("\nStopping test...");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error in dual reader endurance test: " + ex.Message);
+                status.CurrentOperation = "Error";
+                Console.WriteLine("Error in multi-reader test: " + ex.Message);
             }
             finally
             {
+                runTimer.Stop();
+                successCountTimer?.Dispose();
                 CleanupReaders();
             }
         }
 
-        private void LogSuccessCount(object state)
-        {
-            try
-            {
-                int successCount = TagOpController.Instance.GetSuccessCount();
-                int totalReadCount = TagOpController.Instance.GetTotalReadCount();
-                Console.WriteLine($"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                Console.WriteLine($"!!!!!!!!!!!!!!!!!!!!!!!!!! Total Read [{totalReadCount}] Success count: [{successCount}] !!!!!!!!!!!!!!!!!!!!!!!!!!");
-                Console.WriteLine($"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                try
-                {
-                    Console.Title = $"Serializer: {totalReadCount} - {successCount}";
-
-                }
-                catch (Exception)
-                {
-
-                   
-                }
-            }
-            catch (Exception)
-            {
-            }
-
-        }
-
-        private void ConfigureDetectorReader()
-        {
-            // Load the predefined EPC list if needed.
-            EpcListManager.Instance.LoadEpcList("epc_list.txt");
-
-            detectorReader.Connect(detectorAddress);
-            detectorReader.ApplyDefaultSettings();
-
-            var detectorSettings = detectorReader.QueryDefaultSettings();
-            var detectorReaderSettings = GetSettingsForRole("detector");
-            detectorSettings.Report.IncludeFastId = detectorReaderSettings.IncludeFastId;
-            detectorSettings.Report.IncludePeakRssi = detectorReaderSettings.IncludePeakRssi;
-            detectorSettings.Report.IncludePcBits = true;
-            detectorSettings.Report.IncludeAntennaPortNumber = detectorReaderSettings.IncludeAntennaPortNumber;
-            detectorSettings.Report.Mode = (ReportMode)Enum.Parse(typeof(ReportMode), detectorReaderSettings.ReportMode);
-            detectorSettings.RfMode = (uint)detectorReaderSettings.RfMode;
-
-            detectorSettings.Antennas.DisableAll();
-            detectorSettings.Antennas.GetAntenna((ushort)detectorReaderSettings.AntennaPort).IsEnabled = true;
-            detectorSettings.Antennas.GetAntenna((ushort)detectorReaderSettings.AntennaPort).TxPowerInDbm = detectorReaderSettings.TxPowerInDbm;
-            detectorSettings.Antennas.GetAntenna((ushort)detectorReaderSettings.AntennaPort).MaxRxSensitivity = detectorReaderSettings.MaxRxSensitivity;
-            detectorSettings.Antennas.GetAntenna((ushort)detectorReaderSettings.AntennaPort).RxSensitivityInDbm = detectorReaderSettings.RxSensitivityInDbm;
-
-            // Use a different antenna port for the reader (e.g., port 2).
-            detectorSettings.Antennas.GetAntenna(2).IsEnabled = true;
-            detectorSettings.Antennas.GetAntenna(2).TxPowerInDbm = detectorReaderSettings.TxPowerInDbm;
-            detectorSettings.Antennas.GetAntenna(2).MaxRxSensitivity = detectorReaderSettings.MaxRxSensitivity;
-            detectorSettings.Antennas.GetAntenna(2).RxSensitivityInDbm = detectorReaderSettings.RxSensitivityInDbm;
-
-            detectorSettings.SearchMode = (SearchMode)Enum.Parse(typeof(SearchMode), detectorReaderSettings.SearchMode);
-            detectorSettings.Session = (ushort)detectorReaderSettings.Session;
-
-            EnableLowLatencyReporting(detectorSettings, detectorReader);
-            detectorReader.ApplySettings(detectorSettings);
-        }
-        private void ConfigureWriterReader()
-        {
-            // Load the predefined EPC list.
-            EpcListManager.Instance.LoadEpcList("epc_list.txt");
-
-            writerReader.Connect(writerAddress);
-            writerReader.ApplyDefaultSettings();
-
-            var writerSettings = writerReader.QueryDefaultSettings();
-            var writerReaderSettings = GetSettingsForRole("writer");
-            writerSettings.Report.IncludeFastId = writerReaderSettings.IncludeFastId;
-            writerSettings.Report.IncludePeakRssi = writerReaderSettings.IncludePeakRssi;
-            writerSettings.Report.IncludePcBits = true;
-            writerSettings.Report.IncludeAntennaPortNumber = writerReaderSettings.IncludeAntennaPortNumber;
-            writerSettings.Report.Mode = (ReportMode)Enum.Parse(typeof(ReportMode), writerReaderSettings.ReportMode);
-            writerSettings.RfMode = (uint)writerReaderSettings.RfMode;
-
-            writerSettings.Antennas.DisableAll();
-            writerSettings.Antennas.GetAntenna((ushort)writerReaderSettings.AntennaPort).IsEnabled = true;
-            writerSettings.Antennas.GetAntenna((ushort)writerReaderSettings.AntennaPort).TxPowerInDbm = writerReaderSettings.TxPowerInDbm;
-            writerSettings.Antennas.GetAntenna((ushort)writerReaderSettings.AntennaPort).MaxRxSensitivity = writerReaderSettings.MaxRxSensitivity;
-            writerSettings.Antennas.GetAntenna((ushort)writerReaderSettings.AntennaPort).RxSensitivityInDbm = writerReaderSettings.RxSensitivityInDbm;
-
-            // Use a different antenna port for the reader (e.g., port 2).
-            writerSettings.Antennas.GetAntenna(2).IsEnabled = true;
-            writerSettings.Antennas.GetAntenna(2).TxPowerInDbm = writerReaderSettings.TxPowerInDbm;
-            writerSettings.Antennas.GetAntenna(2).MaxRxSensitivity = writerReaderSettings.MaxRxSensitivity;
-            writerSettings.Antennas.GetAntenna(2).RxSensitivityInDbm = writerReaderSettings.RxSensitivityInDbm;
-
-            writerSettings.SearchMode = (SearchMode)Enum.Parse(typeof(SearchMode), writerReaderSettings.SearchMode);
-            writerSettings.Session = (ushort)writerReaderSettings.Session;
-
-            EnableLowLatencyReporting(writerSettings, writerReader);
-            writerReader.ApplySettings(writerSettings);
-        }
-
-        private void ConfigureVerifierReader()
-        {
-            verifierReader.Connect(verifierAddress);
-            verifierReader.ApplyDefaultSettings();
-
-            var verifierSettings = verifierReader.QueryDefaultSettings();
-            var verifierReaderSettings = GetSettingsForRole("verifier");
-            verifierSettings.Report.IncludeFastId = verifierReaderSettings.IncludeFastId;
-            verifierSettings.Report.IncludePeakRssi = verifierReaderSettings.IncludePeakRssi;
-            verifierSettings.Report.IncludePcBits = true;
-            //verifierSettings.Report.IncludeEnhancedIntegra = true;
-            verifierSettings.Report.IncludeAntennaPortNumber = verifierReaderSettings.IncludeAntennaPortNumber;
-            verifierSettings.Report.Mode = (ReportMode)Enum.Parse(typeof(ReportMode), verifierReaderSettings.ReportMode);
-            verifierSettings.RfMode = (uint)verifierReaderSettings.RfMode;
-
-            verifierSettings.Antennas.DisableAll();
-            verifierSettings.Antennas.GetAntenna((ushort)verifierReaderSettings.AntennaPort).IsEnabled = true;
-            verifierSettings.Antennas.GetAntenna((ushort)verifierReaderSettings.AntennaPort).TxPowerInDbm = verifierReaderSettings.TxPowerInDbm;
-            verifierSettings.Antennas.GetAntenna((ushort)verifierReaderSettings.AntennaPort).MaxRxSensitivity = verifierReaderSettings.MaxRxSensitivity;
-            verifierSettings.Antennas.GetAntenna((ushort)verifierReaderSettings.AntennaPort).RxSensitivityInDbm = verifierReaderSettings.RxSensitivityInDbm;
-            // Use a different antenna port for the verifier (e.g., port 2).
-            verifierSettings.Antennas.GetAntenna(2).IsEnabled = true;
-            verifierSettings.Antennas.GetAntenna(2).TxPowerInDbm = verifierReaderSettings.TxPowerInDbm;
-            verifierSettings.Antennas.GetAntenna(2).MaxRxSensitivity = verifierReaderSettings.MaxRxSensitivity;
-            verifierSettings.Antennas.GetAntenna(2).RxSensitivityInDbm = verifierReaderSettings.RxSensitivityInDbm;
-
-            verifierSettings.SearchMode = (SearchMode)Enum.Parse(typeof(SearchMode), verifierReaderSettings.SearchMode);
-            verifierSettings.Session = (ushort)verifierReaderSettings.Session;
-
-            EnableLowLatencyReporting(verifierSettings, verifierReader);
-            verifierReader.ApplySettings(verifierSettings);
-        }
-
-        private void EnableLowLatencyReporting(Settings settings, ImpinjReader reader)
-        {
-            var addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
-            var setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
-            setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
-            {
-                ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
-            });
-            reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
-        }
-
-        private void CleanupReaders()
-        {
-            try
-            {
-                if (detectorReader != null)
-                {
-                    detectorReader.Stop();
-                    detectorReader.Disconnect();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("detectorReader - Error during cleanup: " + ex.Message);
-            }
-            try
-            {
-                if (writerReader != null)
-                {
-                    writerReader.Stop();
-                    writerReader.Disconnect();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("writerReader - Error during reader cleanup: " + ex.Message);
-            }
-            try
-            {
-                if (verifierReader != null)
-                {
-                    verifierReader.Stop();
-                    verifierReader.Disconnect();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("verifierReader - Error during reader cleanup: " + ex.Message);
-            }
-        }
         private void OnTagsReportedDetector(ImpinjReader sender, TagReport report)
         {
             if (report == null || IsCancellationRequested())
@@ -407,12 +186,12 @@ namespace OctaneTagWritingTest.JobStrategies
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
                     Console.WriteLine($">>>>>>>>>>New target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
-                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex,tidHex);
+                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($">>>>>>>>>>New tag found. TID: {tidHex}. Assigning new EPC: {epcHex} -> {expectedEpc}");
                 }
 
-                
+
                 if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
                 {
                     // Trigger the write operation using the writer reader.
@@ -423,7 +202,7 @@ namespace OctaneTagWritingTest.JobStrategies
                         cancellationToken,
                         swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
                         newAccessPassword,
-                        true, 
+                        true,
                         1,
                         true,
                         3);
@@ -448,7 +227,7 @@ namespace OctaneTagWritingTest.JobStrategies
                         TagOpController.Instance.HandleVerifiedTag(tag, tidHex, expectedEpc, swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()), swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()), cycleCount, tag, TagOpController.Instance.GetChipModel(tag), logFile);
                         //Console.WriteLine($"TID {tidHex} verified successfully on writer reader. Current EPC: {epcHex}");
                         continue;
-                    }                    
+                    }
                 }
 
 
@@ -485,7 +264,7 @@ namespace OctaneTagWritingTest.JobStrategies
                 bool success = expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase);
                 var writeStatus = success ? "Success" : "Failure";
                 Console.WriteLine(".........................................");
-                Console.WriteLine($"OnTagsReportedVerifier - TID {tidHex} - current EPC: {epcHex} Expected EPC: {expectedEpc} Operation Status [{writeStatus}]" );
+                Console.WriteLine($"OnTagsReportedVerifier - TID {tidHex} - current EPC: {epcHex} Expected EPC: {expectedEpc} Operation Status [{writeStatus}]");
                 Console.WriteLine(".........................................");
 
                 if (success)
@@ -495,7 +274,7 @@ namespace OctaneTagWritingTest.JobStrategies
                 }
                 else if (!string.IsNullOrEmpty(expectedEpc))
                 {
-                    
+
                     if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
                     {
                         Console.WriteLine($"Verification mismatch for TID {tidHex}: expected {expectedEpc}, read {epcHex}. Retrying write operation using expected EPC.");
@@ -603,18 +382,73 @@ namespace OctaneTagWritingTest.JobStrategies
                         }
                     }
 
-                    
+
                 }
             }
         }
 
-        /// <summary>
-        /// Appends a line to the CSV log file.
-        /// </summary>
-        /// <param name="line">The CSV line to append.</param>
-        private void LogToCsv(string line)
+        private void LogSuccessCount(object state)
         {
-            TagOpController.Instance.LogToCsv(logFile, line);
+            try
+            {
+                int successCount = TagOpController.Instance.GetSuccessCount();
+                int totalReadCount = TagOpController.Instance.GetTotalReadCount();
+
+                lock (status)
+                {
+                    status.TotalTagsProcessed = totalReadCount;
+                    status.SuccessCount = successCount;
+                    status.FailureCount = totalReadCount - successCount;
+                    status.ProgressPercentage = totalReadCount > 0
+                        ? Math.Min(100, (double)successCount / totalReadCount * 100)
+                        : 0;
+                }
+
+                Console.WriteLine($"Total Read [{totalReadCount}] Success count: [{successCount}]");
+            }
+            catch (Exception)
+            {
+                // Ignore timer exceptions
+            }
+        }
+
+        public override JobExecutionStatus GetStatus()
+        {
+            lock (status)
+            {
+                return new JobExecutionStatus
+                {
+                    TotalTagsProcessed = status.TotalTagsProcessed,
+                    SuccessCount = status.SuccessCount,
+                    FailureCount = status.FailureCount,
+                    ProgressPercentage = status.ProgressPercentage,
+                    CurrentOperation = status.CurrentOperation,
+                    RunTime = status.RunTime,
+                    Metrics = new Dictionary<string, object>
+                {
+                    { "CycleCount", cycleCount.Count > 0 ? cycleCount.Values.Average() : 0 },
+                    { "MaxCycle", cycleCount.Count > 0 ? cycleCount.Values.Max() : 0 },
+                    { "AvgWriteTimeMs", swWriteTimers.Count > 0 ? swWriteTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
+                    { "AvgVerifyTimeMs", swVerifyTimers.Count > 0 ? swVerifyTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
+                    { "ElapsedSeconds", runTimer.Elapsed.TotalSeconds }
+                }
+                };
+            }
+        }
+
+        public override StrategyMetadata GetMetadata()
+        {
+            return new StrategyMetadata
+            {
+                Name = "MultiReaderEnduranceStrategy",
+                Description = "Performs endurance testing using multiple readers for detection, writing, and verification",
+                Category = "Advanced Testing",
+                ConfigurationType = typeof(WriteStrategyConfiguration),
+                Capabilities = StrategyCapability.Reading | StrategyCapability.Writing |
+                    StrategyCapability.Verification | StrategyCapability.MultiReader |
+                    StrategyCapability.MultiAntenna,
+                RequiresMultipleReaders = true
+            };
         }
     }
 }

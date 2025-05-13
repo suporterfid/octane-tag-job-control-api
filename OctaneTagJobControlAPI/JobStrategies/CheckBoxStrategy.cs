@@ -8,77 +8,85 @@ using System.Threading;
 using System.Threading.Tasks;
 using Impinj.OctaneSdk;
 using Impinj.TagUtils;
+using OctaneTagJobControlAPI.JobStrategies.Base.Configuration.StrategyConfiguration;
+using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
-using Org.LLRP.LTK.LLRPV1.Impinj;
+using OctaneTagJobControlAPI.Models;
 
-namespace OctaneTagWritingTest.JobStrategies
+namespace OctaneTagJobControlAPI.Strategies
 {
-    /// <summary> 
-    /// Single-reader "CheckBox" strategy with flexible EPC encoding support.
-    /// This strategy uses a single reader configured with four antennas. 
-    /// It reads tags for a configurable period, then confirms the number of tags, 
+    /// <summary>
+    /// Single-reader strategy that reads tags during a configurable period, confirms the number of tags,
     /// generates new EPCs based on the selected encoding method, and writes them to the tags.
-    /// The writing phase runs until all collected tags are written or until a write timeout is reached. 
-    /// At the end, it verifies each tag's new EPC and reports the results. 
-    /// </summary> 
-    public class JobStrategy9CheckBox : BaseTestStrategy
+    /// </summary>
+    [StrategyDescription(
+        "Reads, encodes, and writes EPC data to tags in a checkbox-like flow controlled by GPI events",
+        "Encoding",
+        StrategyCapability.Reading | StrategyCapability.Writing | StrategyCapability.Verification | StrategyCapability.Encoding)]
+    public class CheckBoxStrategy : SingleReaderStrategyBase
     {
-        // Encoding methods that the strategy supports
+        /// <summary>
+        /// Encoding methods that the strategy supports
+        /// </summary>
         public enum EpcEncodingMethod
         {
-            BasicWithTidSuffix, // Original method: header + SKU + TID suffix
-            SGTIN96,           // SGTIN-96 format
-            CustomFormat       // For future expansion
+            /// <summary>
+            /// Original method: header + SKU + TID suffix
+            /// </summary>
+            BasicWithTidSuffix,
+
+            /// <summary>
+            /// SGTIN-96 format
+            /// </summary>
+            SGTIN96,
+
+            /// <summary>
+            /// For future expansion
+            /// </summary>
+            CustomFormat
         }
 
-        private ImpinjReader writerReader;
-
-        // Duration for tag collection (in seconds)
+        // Configuration constants
         private const int ReadDurationSeconds = 10;
-
-        // Overall timeout for write operations (in seconds)
         private const int WriteTimeoutSeconds = 20;
-
-        // Duration (in ms) for verification read phase
         private const int VerificationDurationMs = 5000;
 
-        // The SKU or GS1 company prefix to use in the EPC
-        private readonly string sku;
-
-        // The EPC header to use
-        private readonly string epcHeader;
-
-        // The encoding method to use
-        private readonly EpcEncodingMethod encodingMethod;
-
-        // SGTIN specific parameters
-        private readonly int partitionValue = 6;  // Default partition value
-        private readonly int itemReference = 0;   // Default item reference
+        // Configuration parameters
+        private readonly string _sku;
+        private readonly string _epcHeader;
+        private readonly EpcEncodingMethod _encodingMethod;
+        private readonly int _partitionValue;
+        private readonly int _itemReference;
 
         // Thread-safe dictionary to track for each tag its initial (original) EPC and current verified EPC
-        private readonly ConcurrentDictionary<string, (string OriginalEpc, string VerifiedEpc)> tagData
+        private readonly ConcurrentDictionary<string, (string OriginalEpc, string VerifiedEpc)> _tagData
             = new ConcurrentDictionary<string, (string, string)>();
 
         // Cumulative count of successfully verified tags
-        private int successCount = 0;
+        private int _successCount = 0;
 
         // Dictionary to capture full Tag objects for later processing
-        private readonly ConcurrentDictionary<string, Tag> collectedTags = new ConcurrentDictionary<string, Tag>();
+        private readonly ConcurrentDictionary<string, Tag> _collectedTags = new ConcurrentDictionary<string, Tag>();
 
         // Separate dictionary for capturing tags during the verification phase
-        private readonly ConcurrentDictionary<string, Tag> verificationTags = new ConcurrentDictionary<string, Tag>();
+        private readonly ConcurrentDictionary<string, Tag> _verificationTags = new ConcurrentDictionary<string, Tag>();
 
         // Flag to indicate if the GPI processing is already running
-        private int gpiProcessingFlag = 0;
+        private int _gpiProcessingFlag = 0;
 
         // This flag is also used to stop collecting further tags once the read period has elapsed
-        private bool isCollectingTags = true;
+        private bool _isCollectingTags = true;
 
         // Flag to indicate that the verification phase is active
-        private bool isVerificationPhase = false;
+        private bool _isVerificationPhase = false;
+
+        // Status tracking
+        private readonly Stopwatch _runTimer = new Stopwatch();
+        private JobExecutionStatus _status = new JobExecutionStatus();
 
         /// <summary>
-        /// Constructor with support for different encoding methods
+        /// Initializes a new instance of the CheckBoxStrategy class
         /// </summary>
         /// <param name="hostname">Reader hostname</param>
         /// <param name="logFile">Path to log file</param>
@@ -88,7 +96,7 @@ namespace OctaneTagWritingTest.JobStrategies
         /// <param name="encodingMethod">Method to use for EPC encoding</param>
         /// <param name="partitionValue">SGTIN-96 partition value (0-6), defaults to 6</param>
         /// <param name="itemReference">SGTIN-96 item reference, defaults to 0</param>
-        public JobStrategy9CheckBox(
+        public CheckBoxStrategy(
             string hostname,
             string logFile,
             Dictionary<string, ReaderSettings> readerSettings,
@@ -99,41 +107,51 @@ namespace OctaneTagWritingTest.JobStrategies
             int itemReference = 0)
             : base(hostname, logFile, readerSettings)
         {
-            this.epcHeader = epcHeader;
-            this.sku = sku ?? "012345678901";
+            _epcHeader = epcHeader;
+            _sku = sku ?? "012345678901";
 
             // Parse encoding method
             if (Enum.TryParse<EpcEncodingMethod>(encodingMethod, true, out var method))
             {
-                this.encodingMethod = method;
+                _encodingMethod = method;
             }
             else
             {
-                this.encodingMethod = EpcEncodingMethod.BasicWithTidSuffix;
+                _encodingMethod = EpcEncodingMethod.BasicWithTidSuffix;
                 Console.WriteLine($"Unrecognized encoding method '{encodingMethod}', defaulting to BasicWithTidSuffix");
             }
 
             // Check encoding method specific parameters
-            if (this.encodingMethod == EpcEncodingMethod.BasicWithTidSuffix && this.sku.Length != 12)
+            if (_encodingMethod == EpcEncodingMethod.BasicWithTidSuffix && _sku.Length != 12)
             {
                 Console.WriteLine("Warning: SKU should be 12 digits for BasicWithTidSuffix encoding");
             }
 
             // Set SGTIN-96 specific parameters
-            this.partitionValue = Math.Clamp(partitionValue, 0, 6);
-            this.itemReference = itemReference;
+            _partitionValue = Math.Clamp(partitionValue, 0, 6);
+            _itemReference = itemReference;
+
+            // Initialize status
+            _status.CurrentOperation = "Initialized";
 
             // Clean up any previous tag operation state
             TagOpController.Instance.CleanUp();
         }
 
+        /// <summary>
+        /// Executes the CheckBox strategy job
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
         public override void RunJob(CancellationToken cancellationToken = default)
         {
             try
             {
                 this.cancellationToken = cancellationToken;
+                _status.CurrentOperation = "Starting";
+                _runTimer.Start();
+
                 Console.WriteLine("=== Single Reader CheckBox Test ===");
-                Console.WriteLine($"Encoding Method: {encodingMethod}");
+                Console.WriteLine($"Encoding Method: {_encodingMethod}");
                 Console.WriteLine("GPI events on Port 1 will trigger tag collection, write, and verification. Press 'q' to cancel.");
 
                 // Load any required EPC list
@@ -142,17 +160,20 @@ namespace OctaneTagWritingTest.JobStrategies
                 // Configure the reader and attach event handlers
                 try
                 {
-                    ConfigureWriterReader();
+                    ConfigureReaderWithGpi();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error during writer reader configuration in CheckBox strategy. {ex.Message}");
+                    _status.CurrentOperation = "Configuration Error";
+                    Console.WriteLine($"Error during reader configuration in CheckBox strategy. {ex.Message}");
                     throw;
                 }
 
                 // Create CSV header if the log file does not exist
                 if (!File.Exists(logFile))
                     LogToCsv("Timestamp,TID,Original_EPC,Expected_EPC,Verified_EPC,Encoding,Result");
+
+                _status.CurrentOperation = "Waiting for GPI Trigger";
 
                 // Keep the application running until the user cancels
                 while (!cancellationToken.IsCancellationRequested)
@@ -161,36 +182,84 @@ namespace OctaneTagWritingTest.JobStrategies
                     {
                         break;
                     }
+
                     Thread.Sleep(200); // Reduce CPU usage
+                    _status.RunTime = _runTimer.Elapsed;
                 }
+
+                _status.CurrentOperation = "Stopping";
+                Console.WriteLine("\nStopping test...");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error in JobStrategy9CheckBox: " + ex.Message);
+                _status.CurrentOperation = "Error";
+                Console.WriteLine("Error in CheckBoxStrategy: " + ex.Message);
             }
             finally
             {
-                CleanupWriterReader();
+                _runTimer.Stop();
+                CleanupReader();
             }
         }
 
         /// <summary>
-        /// Configures the reader settings and attaches all necessary event handlers
+        /// Gets the current status of the job execution
         /// </summary>
-        private void ConfigureWriterReader()
+        public override JobExecutionStatus GetStatus()
+        {
+            lock (_status)
+            {
+                return new JobExecutionStatus
+                {
+                    TotalTagsProcessed = _tagData.Count,
+                    SuccessCount = _successCount,
+                    FailureCount = _tagData.Count - _successCount,
+                    ProgressPercentage = _tagData.Count > 0
+                        ? (double)_successCount / _tagData.Count * 100
+                        : 0,
+                    CurrentOperation = _status.CurrentOperation,
+                    RunTime = _status.RunTime,
+                    Metrics = new Dictionary<string, object>
+                    {
+                        { "EncodingMethod", _encodingMethod.ToString() },
+                        { "CollectedTags", _collectedTags.Count },
+                        { "VerifiedTags", _verificationTags.Count },
+                        { "ElapsedSeconds", _runTimer.Elapsed.TotalSeconds },
+                        { "SKU", _sku },
+                        { "EpcHeader", _epcHeader }
+                    }
+                };
+            }
+        }
+
+        /// <summary>
+        /// Gets the metadata for this strategy
+        /// </summary>
+        public override StrategyMetadata GetMetadata()
+        {
+            return new StrategyMetadata
+            {
+                Name = "CheckBoxStrategy",
+                Description = "Reads, encodes, and writes EPC data to tags in a checkbox-like flow controlled by GPI events",
+                Category = "Encoding",
+                ConfigurationType = typeof(JobStrategies.Base.Configuration.StrategyConfiguration.EncodingStrategyConfiguration),
+                Capabilities = StrategyCapability.Reading | StrategyCapability.Writing |
+                    StrategyCapability.Verification | StrategyCapability.Encoding,
+                RequiresMultipleReaders = false
+            };
+        }
+
+        /// <summary>
+        /// Configures the reader settings with GPI event handling
+        /// </summary>
+        private void ConfigureReaderWithGpi()
         {
             var writerSettings = GetSettingsForRole("writer");
-            if (writerReader == null)
-                writerReader = new ImpinjReader();
 
-            if (!writerReader.IsConnected)
-            {
-                writerReader.Connect(writerSettings.Hostname);
-            }
+            reader.Connect(writerSettings.Hostname);
+            reader.ApplyDefaultSettings();
 
-            writerReader.ApplyDefaultSettings();
-
-            var settingsToApply = writerReader.QueryDefaultSettings();
+            var settingsToApply = reader.QueryDefaultSettings();
             settingsToApply.Report.IncludeFastId = writerSettings.IncludeFastId;
             settingsToApply.Report.IncludePeakRssi = writerSettings.IncludePeakRssi;
             settingsToApply.Report.IncludePcBits = true;
@@ -224,22 +293,16 @@ namespace OctaneTagWritingTest.JobStrategies
             settingsToApply.AutoStop.GpiLevel = false;
 
             // Attach event handlers, including our specialized GPI event handler
-            writerReader.GpiChanged += OnGpiEvent;
-            writerReader.TagsReported += OnTagsReported;
+            reader.GpiChanged += OnGpiEvent;
+            reader.TagsReported += OnTagsReported;
+            reader.TagOpComplete += OnTagOpComplete;
 
             // Enable low latency reporting
-            EnableLowLatencyReporting(settingsToApply, writerReader);
-        }
+            EnableLowLatencyReporting(settingsToApply);
 
-        private void EnableLowLatencyReporting(Settings settings, ImpinjReader reader)
-        {
-            var addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
-            var setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
-            setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
-            {
-                ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
-            });
-            reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
+            // Apply the settings
+            reader.ApplySettings(settingsToApply);
+            reader.Start();
         }
 
         /// <summary>
@@ -256,17 +319,28 @@ namespace OctaneTagWritingTest.JobStrategies
             if (e.State)
             {
                 // Use Interlocked.CompareExchange to ensure only one processing instance runs
-                if (Interlocked.CompareExchange(ref gpiProcessingFlag, 1, 0) == 0)
+                if (Interlocked.CompareExchange(ref _gpiProcessingFlag, 1, 0) == 0)
                 {
                     Console.WriteLine("GPI Port 1 is TRUE - initiating tag collection and processing.");
+                    _status.CurrentOperation = "Collecting Tags";
+
                     // Begin tag collection
                     bool collectionConfirmed = await WaitForReadTagsAsync();
                     if (collectionConfirmed)
                     {
+                        _status.CurrentOperation = "Writing Tags";
                         // Proceed to execute write/verify operations once collection is done
                         await EncodeReadTagsAsync();
+
+                        _status.CurrentOperation = "Verifying Tags";
                         // After writing, start the verification phase
                         await VerifyWrittenTagsAsync();
+
+                        _status.CurrentOperation = "Cycle Complete";
+                    }
+                    else
+                    {
+                        _status.CurrentOperation = "Cancelled by User";
                     }
                     // Note: Do not reset the flag here. It will be reset when the GPI event goes to false.
                 }
@@ -279,8 +353,9 @@ namespace OctaneTagWritingTest.JobStrategies
             {
                 // When GPI state becomes false, reset the processing flag
                 Console.WriteLine("GPI Port 1 is FALSE - resetting processing flag.");
-                CleanupWriterReader();
-                Interlocked.Exchange(ref gpiProcessingFlag, 0);
+                CleanupTags();
+                Interlocked.Exchange(ref _gpiProcessingFlag, 0);
+                _status.CurrentOperation = "Waiting for GPI Trigger";
             }
         }
 
@@ -290,7 +365,10 @@ namespace OctaneTagWritingTest.JobStrategies
         /// </summary>
         private async Task<bool> WaitForReadTagsAsync()
         {
-            isCollectingTags = true;
+            _isCollectingTags = true;
+            _collectedTags.Clear();
+            _tagData.Clear();
+
             Console.WriteLine("Collecting tags for {0} seconds...", ReadDurationSeconds);
             try
             {
@@ -301,16 +379,24 @@ namespace OctaneTagWritingTest.JobStrategies
                 Console.WriteLine("Tag collection was canceled.");
                 return false;
             }
-            // End tag collection so that no new tags are accepted
-            isCollectingTags = false;
 
-            Console.WriteLine("Tag collection ended. Total tags collected: {0}. Confirm? (y/n)", tagData.Count);
+            // End tag collection so that no new tags are accepted
+            _isCollectingTags = false;
+
+            // Update status with tag count
+            lock (_status)
+            {
+                _status.TotalTagsProcessed = _tagData.Count;
+            }
+
+            Console.WriteLine("Tag collection ended. Total tags collected: {0}. Confirm? (y/n)", _tagData.Count);
             string confirmation = Console.ReadLine();
             if (!confirmation.Equals("y", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine("Operation canceled by user.");
                 return false;
             }
+
             return true;
         }
 
@@ -320,17 +406,18 @@ namespace OctaneTagWritingTest.JobStrategies
         /// </summary>
         private async Task EncodeReadTagsAsync()
         {
-            Console.WriteLine($"Starting write phase using {encodingMethod} encoding...");
+            Console.WriteLine($"Starting write phase using {_encodingMethod} encoding...");
             Stopwatch globalWriteTimer = Stopwatch.StartNew();
             Stopwatch swWrite = new Stopwatch();
 
-            foreach (var kvp in collectedTags)
+            foreach (var kvp in _collectedTags)
             {
                 if (globalWriteTimer.Elapsed.TotalSeconds > WriteTimeoutSeconds)
                 {
                     Console.WriteLine("Global write timeout reached.");
                     break;
                 }
+
                 Tag tag = kvp.Value;
                 string tid = tag.Tid.ToHexString();
                 string originalEpc = tag.Epc.ToHexString();
@@ -344,7 +431,7 @@ namespace OctaneTagWritingTest.JobStrategies
                 TagOpController.Instance.TriggerWriteAndVerify(
                     tag,
                     newEpc,
-                    writerReader,
+                    reader,
                     cancellationToken,
                     swWrite,
                     newAccessPassword,
@@ -357,8 +444,9 @@ namespace OctaneTagWritingTest.JobStrategies
                 await Task.Delay(100, cancellationToken);
 
                 // Record the tag data
-                tagData.AddOrUpdate(tid, (originalEpc, newEpc), (key, old) => (originalEpc, newEpc));
+                _tagData.AddOrUpdate(tid, (originalEpc, newEpc), (key, old) => (originalEpc, newEpc));
             }
+
             globalWriteTimer.Stop();
         }
 
@@ -372,13 +460,13 @@ namespace OctaneTagWritingTest.JobStrategies
             string tid = tag.Tid.ToHexString();
             string originalEpc = tag.Epc.ToHexString();
 
-            switch (encodingMethod)
+            switch (_encodingMethod)
             {
                 case EpcEncodingMethod.SGTIN96:
                     try
                     {
                         // Use the Sgtin96 class to generate an SGTIN-96 encoded EPC
-                        string gtin = sku;
+                        string gtin = _sku;
                         if (gtin.Length < 13)
                         {
                             // Pad the SKU to at least 13 characters if needed
@@ -386,7 +474,7 @@ namespace OctaneTagWritingTest.JobStrategies
                         }
 
                         // Create SGTIN-96 object
-                        var sgtin96 = Sgtin96.FromGTIN(gtin, partitionValue);
+                        var sgtin96 = Sgtin96.FromGTIN(gtin, _partitionValue);
 
                         // Set serial number based on TID (use last 10 digits of TID as a numeric value)
                         string serialStr = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid;
@@ -435,7 +523,7 @@ namespace OctaneTagWritingTest.JobStrategies
         private string GenerateBasicEpcWithTidSuffix(string tid)
         {
             string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
-            string newEpc = epcHeader + sku + tidSuffix;
+            string newEpc = _epcHeader + _sku + tidSuffix;
             Console.WriteLine($"Generated basic EPC for TID {tid}: {newEpc}");
             return newEpc;
         }
@@ -450,7 +538,7 @@ namespace OctaneTagWritingTest.JobStrategies
             if (cancellationToken.IsCancellationRequested)
                 return;
 
-            if (isVerificationPhase)
+            if (_isVerificationPhase)
             {
                 foreach (var tag in report.Tags)
                 {
@@ -458,24 +546,71 @@ namespace OctaneTagWritingTest.JobStrategies
                     string epc = tag.Epc?.ToHexString() ?? "";
                     if (!string.IsNullOrEmpty(tid))
                     {
-                        verificationTags.TryAdd(tid, tag);
+                        _verificationTags.TryAdd(tid, tag);
                         Console.WriteLine("Verification read: TID: {0}, EPC: {1}", tid, epc);
                     }
                 }
             }
             else
             {
-                if (!isCollectingTags)
+                if (!_isCollectingTags)
                     return;
+
                 foreach (var tag in report.Tags)
                 {
                     string tid = tag.Tid?.ToHexString() ?? "";
                     string epc = tag.Epc?.ToHexString() ?? "";
+
                     if (string.IsNullOrEmpty(tid) || TagOpController.Instance.IsTidProcessed(tid))
                         continue;
-                    collectedTags.TryAdd(tid, tag);
-                    tagData.AddOrUpdate(tid, (epc, string.Empty), (key, old) => (epc, old.VerifiedEpc));
+
+                    _collectedTags.TryAdd(tid, tag);
+                    _tagData.AddOrUpdate(tid, (epc, string.Empty), (key, old) => (epc, old.VerifiedEpc));
+
                     Console.WriteLine("Detected Tag: TID: {0}, EPC: {1}, Antenna: {2}", tid, epc, tag.AntennaPortNumber);
+
+                    // Update status with tag count
+                    lock (_status)
+                    {
+                        _status.TotalTagsProcessed = _tagData.Count;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles tag operation completion events
+        /// </summary>
+        private void OnTagOpComplete(ImpinjReader sender, TagOpReport report)
+        {
+            if (report == null || cancellationToken.IsCancellationRequested)
+                return;
+
+            foreach (TagOpResult result in report)
+            {
+                string tidHex = result.Tag.Tid?.ToHexString() ?? "N/A";
+
+                if (result is TagWriteOpResult writeResult)
+                {
+                    string oldEpc = writeResult.Tag.Epc.ToHexString();
+                    string newEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
+                    string resultStatus = writeResult.Result.ToString();
+
+                    Console.WriteLine($"Write operation for TID {tidHex}: {resultStatus}");
+
+                    bool success = resultStatus == "Success";
+
+                    // If this is a success, increment the counter
+                    if (success)
+                    {
+                        _successCount++;
+
+                        // Update status with success count
+                        lock (_status)
+                        {
+                            _status.SuccessCount = _successCount;
+                        }
+                    }
                 }
             }
         }
@@ -487,9 +622,10 @@ namespace OctaneTagWritingTest.JobStrategies
         private async Task VerifyWrittenTagsAsync()
         {
             Console.WriteLine("Starting verification phase...");
+
             // Prepare for verification
-            verificationTags.Clear();
-            isVerificationPhase = true;
+            _verificationTags.Clear();
+            _isVerificationPhase = true;
 
             // Wait for the verification period
             try
@@ -499,18 +635,19 @@ namespace OctaneTagWritingTest.JobStrategies
             catch (TaskCanceledException)
             {
                 Console.WriteLine("Verification phase was canceled.");
-                isVerificationPhase = false;
+                _isVerificationPhase = false;
                 return;
             }
-            isVerificationPhase = false;
+
+            _isVerificationPhase = false;
 
             int verifiedCount = 0;
-            foreach (var kvp in verificationTags)
+            foreach (var kvp in _verificationTags)
             {
                 string tid = kvp.Key;
                 string reportedEpc = kvp.Value.Epc?.ToHexString() ?? "";
 
-                if (tagData.TryGetValue(tid, out var data))
+                if (_tagData.TryGetValue(tid, out var data))
                 {
                     string originalEpc = data.OriginalEpc;
                     string expectedEpc = TagOpController.Instance.GetExpectedEpc(tid) ?? "";
@@ -528,8 +665,13 @@ namespace OctaneTagWritingTest.JobStrategies
                         Console.WriteLine($"Verification FAILURE: TID {tid} expected EPC {expectedEpc} but got {reportedEpc}");
                     }
 
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tid},{originalEpc},{expectedEpc},{reportedEpc},{encodingMethod},{status}");
-                    TagOpController.Instance.RecordResult(tid, status, success);
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tid},{originalEpc},{expectedEpc},{reportedEpc},{_encodingMethod},{status}");
+
+                    // Don't record the result again if already processed
+                    if (!TagOpController.Instance.IsTidProcessed(tid))
+                    {
+                        TagOpController.Instance.RecordResult(tid, status, success);
+                    }
                 }
                 else
                 {
@@ -537,43 +679,50 @@ namespace OctaneTagWritingTest.JobStrategies
                 }
             }
 
-            Console.WriteLine($"Verification complete: {verifiedCount} / {tagData.Count} tags verified successfully.");
+            // Update status with final verification results
+            lock (_status)
+            {
+                _status.SuccessCount = verifiedCount;
+                _status.FailureCount = _tagData.Count - verifiedCount;
+                _status.ProgressPercentage = _tagData.Count > 0
+                    ? (double)verifiedCount / _tagData.Count * 100
+                    : 0;
+            }
+
+            Console.WriteLine($"Verification complete: {verifiedCount} / {_tagData.Count} tags verified successfully.");
         }
 
         /// <summary>
-        /// Cleans up reader resources, stops any running timers, and detaches event handlers.
+        /// Cleans up tag collections after a cycle
         /// </summary>
-        private void CleanupWriterReader()
+        private void CleanupTags()
         {
             try
             {
-                Console.WriteLine("CleanupWriterReader running... ");
-                if (sw != null && sw.IsRunning)
-                {
-                    sw.Stop();
-                    sw.Reset();
-                }
+                Console.WriteLine("Cleaning up tag collections...");
+                _collectedTags.Clear();
+                _verificationTags.Clear();
+                _isCollectingTags = false;
+                _isVerificationPhase = false;
 
-                // Clear tag collections
-                collectedTags.Clear();
-                verificationTags.Clear();
-                tagData.Clear();
-                TagOpController.Instance.CleanUp();
-                Console.WriteLine("CleanupWriterReader done. ");
+                // Do not clear _tagData or reset _successCount here as they contain 
+                // the cumulative results across all cycles
+
+                Console.WriteLine("Tag collections cleared.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error during CleanupWriterReader: " + ex.Message);
+                Console.WriteLine("Error during tag cleanup: " + ex.Message);
             }
         }
 
         /// <summary>
-        /// Appends a line to the CSV log file.
+        /// Cleans up resources before disposing
         /// </summary>
-        /// <param name="line">The CSV line to append.</param>
-        private void LogToCsv(string line)
+        public override void Dispose()
         {
-            TagOpController.Instance.LogToCsv(logFile, line);
+            CleanupTags();
+            base.Dispose();
         }
     }
 }
