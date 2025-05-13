@@ -21,18 +21,18 @@ namespace OctaneTagJobControlAPI.Controllers
 
         [HttpGet]
         [ProducesResponseType(typeof(List<JobConfiguration>), StatusCodes.Status200OK)]
-        public IActionResult GetAllConfigurations()
+        public async Task<IActionResult> GetAllConfigurations()
         {
-            var configs = _configService.GetAllConfigurations();
+            var configs = await _configService.GetAllConfigurationsAsync();
             return Ok(configs);
         }
 
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(JobConfiguration), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
-        public IActionResult GetConfiguration(string id)
+        public async Task<IActionResult> GetConfiguration(string id)
         {
-            var config = _configService.GetConfiguration(id);
+            var config = await _configService.GetConfigurationAsync(id);
             if (config == null)
             {
                 return NotFound(new ApiResponse<object>
@@ -78,7 +78,7 @@ namespace OctaneTagJobControlAPI.Controllers
         {
             try
             {
-                if (_configService.GetConfiguration(id) == null)
+                if (_configService.GetConfigurationAsync(id) == null)
                 {
                     return NotFound(new ApiResponse<object>
                     {
@@ -118,7 +118,7 @@ namespace OctaneTagJobControlAPI.Controllers
         {
             try
             {
-                if (_configService.GetConfiguration(id) == null)
+                if (_configService.GetConfigurationAsync(id) == null)
                 {
                     return NotFound(new ApiResponse<object>
                     {

@@ -26,17 +26,17 @@ namespace OctaneTagJobControlAPI.Controllers
         [ProducesResponseType(typeof(List<JobStatus>), StatusCodes.Status200OK)]
         public IActionResult GetAllJobs()
         {
-            var jobs = _jobManager.GetAllJobStatuses();
+            var jobs = _jobManager.GetAllJobStatusesAsync();
             return Ok(jobs);
         }
 
         [HttpGet("{jobId}")]
         [ProducesResponseType(typeof(JobStatus), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
-        public IActionResult GetJob(string jobId)
+        public async Task<IActionResult> GetJob(string jobId)
         {
-            var job = _jobManager.GetJobStatus(jobId);
-            if (job.JobId != jobId || job.ErrorMessage == "Job not found")
+            var job = await _jobManager.GetJobStatusAsync(jobId);
+            if (job == null || job.JobId != jobId)
             {
                 return NotFound(new ApiResponse<object>
                 {
@@ -94,7 +94,7 @@ namespace OctaneTagJobControlAPI.Controllers
                 var savedConfig = await _configService.CreateConfigurationAsync(config);
 
                 // Register the job
-                var jobId = _jobManager.RegisterJob(savedConfig);
+                var jobId = await _jobManager.RegisterJobAsync(savedConfig);
 
                 var response = new JobCreatedResponse
                 {
@@ -125,7 +125,7 @@ namespace OctaneTagJobControlAPI.Controllers
             try
             {
                 // Check if the job exists
-                var job = _jobManager.GetJobStatus(jobId);
+                var job = _jobManager.GetJobAsync(jobId);
                 if (job.JobId != jobId || job.ErrorMessage == "Job not found")
                 {
                     return NotFound(new ApiResponse<object>

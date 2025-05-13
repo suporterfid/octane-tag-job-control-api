@@ -32,7 +32,7 @@ namespace OctaneTagJobControlAPI.Controllers
 
         [HttpGet]
         [ProducesResponseType(typeof(ApiResponse<Dictionary<string, object>>), StatusCodes.Status200OK)]
-        public IActionResult GetStatus()
+        public async Task<IActionResult> GetStatus()
         {
             var process = Process.GetCurrentProcess();
             var assembly = Assembly.GetExecutingAssembly();
@@ -40,11 +40,10 @@ namespace OctaneTagJobControlAPI.Controllers
             var uptime = (DateTime.UtcNow - _startTime).ToString(@"dd\.hh\:mm\:ss");
 
             // Get job statistics
-            var jobs = _jobManager.GetAllJobStatuses();
+            var jobs = await _jobManager.GetAllJobStatusesAsync();
             var runningJobs = jobs.Count(j => j.State == JobState.Running);
             var completedJobs = jobs.Count(j => j.State == JobState.Completed);
             var failedJobs = jobs.Count(j => j.State == JobState.Failed);
-
             // Get tag statistics
             var totalTags = TagOpController.Instance.GetTotalReadCount();
             var successTags = TagOpController.Instance.GetSuccessCount();
@@ -187,7 +186,7 @@ namespace OctaneTagJobControlAPI.Controllers
                 : 0;
 
             // Get job statistics
-            var jobs = _jobManager.GetAllJobStatuses();
+            var jobs = await _jobManager.GetAllJobStatusesAsync();
             var runningJobs = jobs.Count(j => j.State == JobState.Running);
 
             // Get current memory usage
