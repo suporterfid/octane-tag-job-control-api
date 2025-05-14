@@ -36,8 +36,9 @@ namespace OctaneTagJobControlAPI.Strategies
         public SpeedTestStrategy(
             string hostname,
             string logFile,
-            Dictionary<string, ReaderSettings> readerSettings)
-            : base(hostname, logFile, readerSettings)
+            Dictionary<string, ReaderSettings> readerSettings,
+            IServiceProvider serviceProvider = null)
+            : base(hostname, logFile, readerSettings, serviceProvider)
         {
             _status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();

@@ -47,8 +47,9 @@ namespace OctaneTagJobControlAPI.Strategies
             string writerHostname,
             string verifierHostname,
             string logFile,
-            Dictionary<string, ReaderSettings> readerSettings)
-            : base(detectorHostname, writerHostname, verifierHostname, logFile, readerSettings)
+            Dictionary<string, ReaderSettings> readerSettings,
+            IServiceProvider serviceProvider = null)
+            : base(detectorHostname, writerHostname, verifierHostname, logFile, readerSettings, serviceProvider)
         {
             status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();

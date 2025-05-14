@@ -6,6 +6,7 @@ using OctaneTagJobControlAPI.Services.Storage;
 using Microsoft.OpenApi.Models;
 using OctaneTagWritingTest.Helpers;
 using System.Text.Json.Serialization;
+using OctaneTagJobControlAPI.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,8 +40,19 @@ var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, "Data");
 builder.Services.AddPersistenceServices(dataDirectory);
 
 // Configure application services
+builder.Services.AddScoped<IJobRepository, JobRepository>();
+builder.Services.AddScoped<IConfigurationRepository, ConfigurationRepository>();
+
+// Register StrategyFactory (make sure to use the correct namespace)
+builder.Services.AddSingleton<OctaneTagJobControlAPI.Strategies.StrategyFactory>();
+
+// Register JobManager after StrategyFactory
 builder.Services.AddSingleton<JobManager>();
+
+// Register JobConfigurationService
 builder.Services.AddSingleton<JobConfigurationService>();
+
+// Register background service
 builder.Services.AddHostedService<JobBackgroundService>();
 
 // Configure CORS

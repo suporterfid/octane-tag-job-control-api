@@ -19,13 +19,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         protected readonly string logFile;
         protected readonly Dictionary<string, ReaderSettings> settings;
         protected CancellationToken cancellationToken;
+        protected IServiceProvider _serviceProvider;
 
         /// <summary>
         /// Initializes a new instance of the JobStrategyBase class
         /// </summary>
         /// <param name="logFile">The path to the log file</param>
         /// <param name="settings">Dictionary of reader settings</param>
-        protected JobStrategyBase(string logFile, Dictionary<string, ReaderSettings> settings)
+        protected JobStrategyBase(string logFile, Dictionary<string, ReaderSettings> settings, IServiceProvider serviceProvider)
         {
             this.logFile = logFile;
             this.settings = settings;
@@ -36,6 +37,8 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 Directory.CreateDirectory(logDirectory);
             }
+
+            _serviceProvider = serviceProvider;
         }
 
         public void SetJobManager(JobManager jobManager)
@@ -48,10 +51,30 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             _currentJobId = jobId;
         }
 
+        public void SetServiceProvider(IServiceProvider serviceProvider)
+        {
+            _serviceProvider = serviceProvider;
+        }
+
         protected void ReportTagData(TagReadData tagData)
         {
-            if (string.IsNullOrEmpty(_currentJobId) || _jobManager == null) return;
-            _jobManager.ReportTagData(_currentJobId, tagData);
+            if (string.IsNullOrEmpty(_currentJobId) || _serviceProvider == null) return;
+
+            try
+            {
+                // Get JobManager from service provider when needed
+                var jobManager = _serviceProvider.GetService<JobManager>();
+                if (jobManager != null)
+                {
+                    tagData.JobId = _currentJobId;
+                    jobManager.ReportTagData(_currentJobId, tagData);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error but don't crash
+                Console.WriteLine($"Error reporting tag data: {ex.Message}");
+            }
         }
 
         /// <summary>

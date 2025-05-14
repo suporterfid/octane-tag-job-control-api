@@ -25,8 +25,9 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         protected SingleReaderStrategyBase(
             string hostname,
             string logFile,
-            Dictionary<string, ReaderSettings> settings)
-            : base(logFile, settings)
+            Dictionary<string, ReaderSettings> settings,
+            IServiceProvider serviceProvider = null)
+            : base(logFile, settings, serviceProvider)
         {
             this.hostname = hostname;
             reader = new ImpinjReader();

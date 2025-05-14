@@ -104,8 +104,9 @@ namespace OctaneTagJobControlAPI.Strategies
             string sku = null,
             string encodingMethod = "BasicWithTidSuffix",
             int partitionValue = 6,
-            int itemReference = 0)
-            : base(hostname, logFile, readerSettings)
+            int itemReference = 0,
+            IServiceProvider serviceProvider = null)
+            : base(hostname, logFile, readerSettings,serviceProvider)
         {
             _epcHeader = epcHeader;
             _sku = sku ?? "012345678901";

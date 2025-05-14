@@ -16,6 +16,7 @@ using OctaneTagJobControlAPI.Strategies;
 using OctaneTagJobControlAPI.Extensions;
 using OctaneTagJobControlAPI.Strategies.Base;
 using Microsoft.Extensions.DependencyInjection;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 
 namespace OctaneTagJobControlAPI.Services
 {
@@ -32,6 +33,7 @@ namespace OctaneTagJobControlAPI.Services
         private readonly IJobRepository _jobRepository;
         private readonly IConfigurationRepository _configRepository;
         private readonly IServiceProvider _serviceProvider;
+        private StrategyFactory _strategyFactory;
 
         public JobManager(
             ILogger<JobManager> logger,
@@ -390,10 +392,6 @@ namespace OctaneTagJobControlAPI.Services
         // Excerpt from JobManager.cs - CreateJobStrategyAsync method update
         // The main changes needed are in the CreateJobStrategyAsync method of the JobManager class
         // This method is responsible for creating strategy instances with the appropriate parameters
-
-        // In OctaneTagJobControlAPI/Services/JobManager.cs
-        // Look for the CreateJobStrategyAsync method (around line 265)
-        // Update the method to extract lock/permalock parameters and pass them to CheckBoxStrategy
         private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config, string jobId = null)
         {
             try
@@ -411,16 +409,151 @@ namespace OctaneTagJobControlAPI.Services
                 }
 
                 // Get the strategy factory from the service provider
-                var strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
+                if(_strategyFactory == null)
+                {
+                    _strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
+                }
+                // var strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
+
+                // Convert JobConfiguration to StrategyConfiguration
+                var strategyConfig = ConvertToStrategyConfiguration(config, strategyType);
 
                 // Create the strategy and pass the jobId
-                return strategyFactory.CreateStrategy(config.StrategyType, config, jobId);
+                return _strategyFactory.CreateStrategy(config.StrategyType, strategyConfig, jobId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error creating strategy instance for {StrategyType}", config.StrategyType);
                 return null;
             }
+        }
+
+        private StrategyConfiguration ConvertToStrategyConfiguration(JobConfiguration jobConfig, Type strategyType)
+        {
+            // Determine which type of configuration to create based on the strategy type
+            StrategyConfiguration config;
+
+            if (strategyType == typeof(CheckBoxStrategy) ||
+                strategyType.Name == "CheckBoxStrategy")
+            {
+                var encodingConfig = new EncodingStrategyConfiguration();
+
+                // Set encoding specific properties
+                if (jobConfig.Parameters.TryGetValue("epcHeader", out var epcHeader))
+                    encodingConfig.EpcHeader = epcHeader;
+
+                if (jobConfig.Parameters.TryGetValue("sku", out var sku))
+                    encodingConfig.Sku = sku;
+
+                if (jobConfig.Parameters.TryGetValue("encodingMethod", out var encodingMethod))
+                    encodingConfig.EncodingMethod = encodingMethod;
+
+                if (jobConfig.Parameters.TryGetValue("partitionValue", out var partitionStr) &&
+                    int.TryParse(partitionStr, out int partition))
+                    encodingConfig.PartitionValue = partition;
+
+                if (jobConfig.Parameters.TryGetValue("itemReference", out var itemRefStr) &&
+                    int.TryParse(itemRefStr, out int itemRef))
+                    encodingConfig.ItemReference = itemRef;
+
+                config = encodingConfig;
+            }
+            else if (typeof(MultiReaderStrategyBase).IsAssignableFrom(strategyType))
+            {
+                if (strategyType.Name.Contains("MultiAntenna"))
+                {
+                    var multiAntennaConfig = new MultiAntennaStrategyConfiguration();
+                    config = multiAntennaConfig;
+                }
+                else if (strategyType.Name.Contains("Endurance"))
+                {
+                    var newEnduranceConfig = new EnduranceTestConfiguration();
+                    config = newEnduranceConfig;
+                }
+                else
+                {
+                    config = new WriteStrategyConfiguration();
+                }
+            }
+            else if (strategyType.Name.Contains("ReadOnly") ||
+                     strategyType.Name.Contains("Reading") ||
+                     strategyType == typeof(ReadOnlyLoggingStrategy))
+            {
+                var readConfig = new ReadOnlyStrategyConfiguration();
+                config = readConfig;
+            }
+            else
+            {
+                // Default to write strategy configuration
+                config = new WriteStrategyConfiguration();
+            }
+
+            // Set common properties
+            config.LogFilePath = jobConfig.LogFilePath;
+
+            // Convert reader settings
+            var readerSettings = new ReaderSettingsGroup
+            {
+                Detector = jobConfig.ReaderSettingsGroup?.Detector?.Clone(),
+                Writer = jobConfig.ReaderSettingsGroup?.Writer?.Clone(),
+                Verifier = jobConfig.ReaderSettingsGroup?.Verifier?.Clone()
+            };
+
+            config.ReaderSettings = readerSettings;
+
+            // Set additional properties from parameters
+            if (config is WriteStrategyConfiguration writeConfig)
+            {
+                if (jobConfig.Parameters.TryGetValue("accessPassword", out var password))
+                    writeConfig.AccessPassword = password;
+
+                if (jobConfig.Parameters.TryGetValue("useFastId", out var fastIdStr))
+                    writeConfig.UseFastId = bool.TryParse(fastIdStr, out bool fastId) ? fastId : true;
+
+                if (jobConfig.Parameters.TryGetValue("retryCount", out var retryStr) &&
+                    int.TryParse(retryStr, out int retry))
+                    writeConfig.RetryCount = retry;
+
+                if (jobConfig.Parameters.TryGetValue("verifyWrites", out var verifyStr))
+                    writeConfig.VerifyWrites = bool.TryParse(verifyStr, out bool verify) ? verify : true;
+
+                if (jobConfig.Parameters.TryGetValue("writeTimeoutSeconds", out var timeoutStr) &&
+                    int.TryParse(timeoutStr, out int timeout))
+                    writeConfig.WriteTimeoutSeconds = timeout;
+
+                if (jobConfig.Parameters.TryGetValue("enableLock", out var lockStr))
+                    writeConfig.LockAfterWrite = bool.TryParse(lockStr, out bool lockVal) ? lockVal : false;
+
+                if (jobConfig.Parameters.TryGetValue("enablePermalock", out var permalockStr))
+                    writeConfig.PermalockAfterWrite = bool.TryParse(permalockStr, out bool permalock) ? permalock : false;
+            }
+
+            if (config is ReadOnlyStrategyConfiguration readOnlyConfig)
+            {
+                if (jobConfig.Parameters.TryGetValue("readDurationSeconds", out var durationStr) &&
+                    int.TryParse(durationStr, out int duration))
+                    readOnlyConfig.ReadDurationSeconds = duration;
+
+                if (jobConfig.Parameters.TryGetValue("filterDuplicates", out var filterStr))
+                    readOnlyConfig.FilterDuplicates = bool.TryParse(filterStr, out bool filter) ? filter : true;
+
+                if (jobConfig.Parameters.TryGetValue("maxTagCount", out var maxTagsStr) &&
+                    int.TryParse(maxTagsStr, out int maxTags))
+                    readOnlyConfig.MaxTagCount = maxTags;
+            }
+
+            if (config is EnduranceTestConfiguration enduranceConfig)
+            {
+                if (jobConfig.Parameters.TryGetValue("maxCycles", out var cyclesStr) &&
+                    int.TryParse(cyclesStr, out int cycles))
+                    enduranceConfig.MaxCycles = cycles;
+
+                if (jobConfig.Parameters.TryGetValue("testDurationSeconds", out var testDurationStr) &&
+                    int.TryParse(testDurationStr, out int testDuration))
+                    enduranceConfig.TestDurationSeconds = testDuration;
+            }
+
+            return config;
         }
 
         /// <summary>

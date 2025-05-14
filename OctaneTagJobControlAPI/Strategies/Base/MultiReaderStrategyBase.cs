@@ -33,8 +33,9 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             string writerHostname,
             string verifierHostname,
             string logFile,
-            Dictionary<string, ReaderSettings> settings)
-            : base(logFile, settings)
+            Dictionary<string, ReaderSettings> settings,
+            IServiceProvider serviceProvider = null)
+            : base(logFile, settings, serviceProvider)
         {
             this.detectorHostname = detectorHostname;
             this.writerHostname = writerHostname;

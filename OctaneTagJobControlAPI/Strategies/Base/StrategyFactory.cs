@@ -20,23 +20,20 @@ namespace OctaneTagJobControlAPI.Strategies
         private readonly ILogger<StrategyFactory> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly Dictionary<string, Type> _strategyTypes;
-        private readonly JobManager _jobManager;
 
         /// <summary>
         /// Initializes a new instance of the StrategyFactory class
         /// </summary>
         /// <param name="logger">Logger instance</param>
         /// <param name="serviceProvider">Service provider for dependency injection</param>
-        /// <param name="jobManager">Job manager for dependency injection</param>
         public StrategyFactory(
             ILogger<StrategyFactory> logger,
-            IServiceProvider serviceProvider,
-            JobManager jobManager)
+            IServiceProvider serviceProvider)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _strategyTypes = DiscoverStrategyTypes();
-            _jobManager = jobManager;
+
         }
 
         /// <summary>
@@ -84,14 +81,15 @@ namespace OctaneTagJobControlAPI.Strategies
                     strategy = CreateSingleReaderStrategy(strategyType, config);
                 }
 
-                // Set up the strategy with JobId and JobManager (new code)
+                // Set up the strategy with JobId
                 if (strategy is JobStrategyBase baseStrategy)
                 {
                     if (!string.IsNullOrEmpty(jobId))
                     {
                         baseStrategy.SetJobId(jobId);
                     }
-                    baseStrategy.SetJobManager(_jobManager);
+
+                    // Don't set the JobManager here - strategies will get it when needed
                 }
 
                 return strategy;
@@ -114,7 +112,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 config.ReaderSettings.Writer.Hostname,
                 config.ReaderSettings.Verifier.Hostname,
                 config.LogFilePath,
-                ConvertReaderSettings(config.ReaderSettings));
+                ConvertReaderSettings(config.ReaderSettings),
+                _serviceProvider);
         }
 
         /// <summary>
@@ -136,7 +135,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 encodingConfig.Sku,
                 encodingConfig.EncodingMethod,
                 encodingConfig.PartitionValue,
-                encodingConfig.ItemReference);
+                encodingConfig.ItemReference,
+                _serviceProvider);
         }
 
         /// <summary>
@@ -148,7 +148,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 strategyType,
                 config.ReaderSettings.Writer.Hostname,
                 config.LogFilePath,
-                ConvertReaderSettings(config.ReaderSettings));
+                ConvertReaderSettings(config.ReaderSettings),
+                _serviceProvider);
         }
 
         /// <summary>
