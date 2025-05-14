@@ -24,5 +24,12 @@
         /// Interval for logging success counts
         /// </summary>
         public int SuccessCountLogIntervalSeconds { get; set; } = 5;
+
+        public bool EnableGpiTrigger { get; set; } = false;
+        public int GpiPort { get; set; } = 1;
+        public bool GpiTriggerState { get; set; } = true;
+        public bool EnableGpoOutput { get; set; } = false;
+        public int GpoPort { get; set; } = 1;
+        public int GpoVerificationTimeoutMs { get; set; } = 1000;
     }
 }
