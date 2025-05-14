@@ -407,5 +407,98 @@ namespace OctaneTagJobControlAPI.Controllers
             var strategies = _jobManager.GetAvailableStrategies();
             return Ok(strategies);
         }
+
+        [HttpGet("{jobId}/tags")]
+        [ProducesResponseType(typeof(ApiResponse<TagDataResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public IActionResult GetJobTags(
+    string jobId,
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 50,
+    [FromQuery] string sortBy = "timestamp",
+    [FromQuery] bool descending = true,
+    [FromQuery] string filter = null)
+        {
+            // Check if the job exists
+            var job = _jobManager.GetJobStatusAsync(jobId).GetAwaiter().GetResult();
+            if (job == null || job.JobId != jobId)
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = $"Job with ID {jobId} not found"
+                });
+            }
+
+            var allTagData = _jobManager.GetJobTagData(jobId);
+
+            // Apply filtering if specified
+            var filteredTags = allTagData.Tags;
+            if (!string.IsNullOrEmpty(filter))
+            {
+                filter = filter.ToLowerInvariant();
+                filteredTags = filteredTags
+                    .Where(t =>
+                        t.TID.ToLowerInvariant().Contains(filter) ||
+                        t.EPC.ToLowerInvariant().Contains(filter))
+                    .ToList();
+            }
+
+            // Apply sorting
+            filteredTags = sortBy.ToLowerInvariant() switch
+            {
+                "tid" => descending ? filteredTags.OrderByDescending(t => t.TID).ToList() : filteredTags.OrderBy(t => t.TID).ToList(),
+                "epc" => descending ? filteredTags.OrderByDescending(t => t.EPC).ToList() : filteredTags.OrderBy(t => t.EPC).ToList(),
+                "readcount" => descending ? filteredTags.OrderByDescending(t => t.ReadCount).ToList() : filteredTags.OrderBy(t => t.ReadCount).ToList(),
+                "rssi" => descending ? filteredTags.OrderByDescending(t => t.RSSI).ToList() : filteredTags.OrderBy(t => t.RSSI).ToList(),
+                "antenna" => descending ? filteredTags.OrderByDescending(t => t.AntennaPort).ToList() : filteredTags.OrderBy(t => t.AntennaPort).ToList(),
+                _ => descending ? filteredTags.OrderByDescending(t => t.Timestamp).ToList() : filteredTags.OrderBy(t => t.Timestamp).ToList()
+            };
+
+            // Apply paging
+            int totalItems = filteredTags.Count;
+            int totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+
+            // Ensure page is within bounds
+            page = Math.Max(1, Math.Min(page, totalPages == 0 ? 1 : totalPages));
+
+            var pagedTags = filteredTags
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            // Create response
+            var response = new TagDataResponse
+            {
+                JobId = jobId,
+                Tags = pagedTags,
+                TotalCount = allTagData.TotalCount,
+                UniqueCount = allTagData.UniqueCount,
+                LastUpdated = allTagData.LastUpdated
+            };
+
+            return Ok(new ApiResponse<object>
+            {
+                Success = true,
+                Message = $"Found {totalItems} matching tags (page {page} of {totalPages})",
+                Data = new
+                {
+                    Tags = pagedTags,
+                    Pagination = new
+                    {
+                        Page = page,
+                        PageSize = pageSize,
+                        TotalItems = totalItems,
+                        TotalPages = totalPages
+                    },
+                    Summary = new
+                    {
+                        TotalReads = allTagData.TotalCount,
+                        UniqueTagCount = allTagData.UniqueCount,
+                        LastUpdated = allTagData.LastUpdated
+                    }
+                }
+            });
+        }
     }
 }

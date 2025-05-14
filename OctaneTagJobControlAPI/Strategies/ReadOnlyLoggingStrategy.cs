@@ -111,6 +111,24 @@ namespace OctaneTagJobControlAPI.Strategies
                 Console.WriteLine($"Read tag TID={tidHex}, EPC={epcHex}, Count={_tagReadCounts[tidHex]}");
                 LogToCsv($"{timestamp},{tidHex},{epcHex},{_tagReadCounts[tidHex]},{rssi},{antennaPort}");
 
+                ReportTagData(new TagReadData
+                {
+                        TID = tidHex,
+                        EPC = epcHex,
+                        RSSI = tag.PeakRssiInDbm,
+                        AntennaPort = antennaPort,
+                        Timestamp = DateTime.Now,
+                        ReadCount = 1,
+                        PcBits = tag.PcBits.ToString() ?? string.Empty,
+                        AdditionalData = new Dictionary<string, object>
+                        {
+                            { "FastID", tag.IsFastIdPresent },
+                            { "Phase", tag.PhaseAngleInRadians },
+                            { "ChannelInMhz", tag.ChannelInMhz },
+                            { "TagReadCount",_tagReadCounts[tidHex]}
+                        }
+                });
+
                 lock (_status)
                 {
                     _status.TotalTagsProcessed = _tagReadCounts.Count;

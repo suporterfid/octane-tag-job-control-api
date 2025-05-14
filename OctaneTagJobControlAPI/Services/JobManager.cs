@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using OctaneTagJobControlAPI.Strategies;
 using OctaneTagJobControlAPI.Extensions;
 using OctaneTagJobControlAPI.Strategies.Base;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace OctaneTagJobControlAPI.Services
 {
@@ -26,18 +27,22 @@ namespace OctaneTagJobControlAPI.Services
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellationTokens = new();
         private readonly ConcurrentDictionary<string, Task> _jobTasks = new();
         private readonly ConcurrentDictionary<string, IJobStrategy> _jobStrategies = new();
+        private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, TagReadData>> _jobTagData = new();
         private readonly ILogger<JobManager> _logger;
         private readonly IJobRepository _jobRepository;
         private readonly IConfigurationRepository _configRepository;
+        private readonly IServiceProvider _serviceProvider;
 
         public JobManager(
             ILogger<JobManager> logger,
+            IServiceProvider serviceProvider,
             IJobRepository jobRepository,
             IConfigurationRepository configRepository)
         {
             _logger = logger;
             _jobRepository = jobRepository;
             _configRepository = configRepository;
+            _serviceProvider = serviceProvider;
         }
 
         /// <summary>
@@ -128,7 +133,7 @@ namespace OctaneTagJobControlAPI.Services
                 cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
                 // Create and configure strategy
-                var strategy = await CreateJobStrategyAsync(config);
+                var strategy = await CreateJobStrategyAsync(config, jobId);
                 if (strategy == null)
                 {
                     status.State = JobState.Failed;
@@ -136,6 +141,8 @@ namespace OctaneTagJobControlAPI.Services
                     await _jobRepository.UpdateJobStatusAsync(jobId, status);
                     return false;
                 }
+
+                (strategy as JobStrategyBase)?.SetJobId(jobId);
 
                 _jobStrategies[jobId] = strategy;
 
@@ -314,6 +321,68 @@ namespace OctaneTagJobControlAPI.Services
                     }
                 }
             }
+
+            foreach (var jobId in _jobTagData.Keys.ToList())
+            {
+                var status = _jobRepository.GetJobStatusAsync(jobId).GetAwaiter().GetResult();
+                if (status?.IsFinished == true)
+                {
+                    _jobTagData.TryRemove(jobId, out _);
+                }
+            }
+        }
+
+        public void ReportTagData(string jobId, TagReadData tagData)
+        {
+            // Ensure the job dictionary exists
+            var jobTags = _jobTagData.GetOrAdd(jobId, _ => new ConcurrentDictionary<string, TagReadData>());
+
+            // Use TID as the key if available, otherwise EPC
+            string key = !string.IsNullOrEmpty(tagData.TID) ? tagData.TID : tagData.EPC;
+
+            // Update existing tag data or add new
+            jobTags.AddOrUpdate(key, tagData, (_, existing) => {
+                existing.ReadCount++;
+                existing.Timestamp = tagData.Timestamp;
+                existing.RSSI = tagData.RSSI;
+                existing.AntennaPort = tagData.AntennaPort;
+                // Only update EPC if the new one isn't empty and different
+                if (!string.IsNullOrEmpty(tagData.EPC) && existing.EPC != tagData.EPC)
+                    existing.EPC = tagData.EPC;
+                return existing;
+            });
+        }
+
+        public TagDataResponse GetJobTagData(string jobId)
+        {
+            if (!_jobTagData.TryGetValue(jobId, out var jobTags))
+            {
+                return new TagDataResponse
+                {
+                    JobId = jobId,
+                    Tags = new List<TagReadData>(),
+                    TotalCount = 0,
+                    UniqueCount = 0,
+                    LastUpdated = DateTime.UtcNow
+                };
+            }
+
+            var tags = jobTags.Values.ToList();
+            int totalReads = tags.Sum(t => t.ReadCount);
+
+            return new TagDataResponse
+            {
+                JobId = jobId,
+                Tags = tags,
+                TotalCount = totalReads,
+                UniqueCount = tags.Count,
+                LastUpdated = tags.Any() ? tags.Max(t => t.Timestamp) : DateTime.UtcNow
+            };
+        }
+
+        public void ClearJobTagData(string jobId)
+        {
+            _jobTagData.TryRemove(jobId, out _);
         }
 
         #region Private Methods
@@ -325,7 +394,7 @@ namespace OctaneTagJobControlAPI.Services
         // In OctaneTagJobControlAPI/Services/JobManager.cs
         // Look for the CreateJobStrategyAsync method (around line 265)
         // Update the method to extract lock/permalock parameters and pass them to CheckBoxStrategy
-        private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config)
+        private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config, string jobId = null)
         {
             try
             {
@@ -340,137 +409,12 @@ namespace OctaneTagJobControlAPI.Services
                     _logger.LogError("Strategy type {StrategyType} not found", config.StrategyType);
                     return null;
                 }
-                // Convert ReaderSettingsGroup to Dictionary using extension method
-                var readerSettings = config.ReaderSettingsGroup.ToDictionary();
 
-                // Extract common parameters
-                string logFilePath = config.LogFilePath;
+                // Get the strategy factory from the service provider
+                var strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
 
-                // Extract additional parameters that might be needed by specific strategies
-                config.Parameters.TryGetValue("epcHeader", out var epcHeader);
-                config.Parameters.TryGetValue("sku", out var sku);
-                config.Parameters.TryGetValue("encodingMethod", out var encodingMethod);
-
-                // Parse SGTIN-96 specific parameters
-                int partitionValue = 6; // Default value
-                if (config.Parameters.TryGetValue("partitionValue", out var partitionStr) &&
-                    int.TryParse(partitionStr, out int parsedPartition))
-                {
-                    partitionValue = parsedPartition;
-                }
-
-                int itemReference = 0; // Default value
-                if (config.Parameters.TryGetValue("itemReference", out var itemRefStr) &&
-                    int.TryParse(itemRefStr, out int parsedItemRef))
-                {
-                    itemReference = parsedItemRef;
-                }
-
-                // Extract lock/permalock parameters
-                bool enableLock = false;
-                if (config.Parameters.TryGetValue("enableLock", out var lockStr))
-                {
-                    enableLock = bool.TryParse(lockStr, out bool parsedLock) ? parsedLock :
-                                 lockStr.Equals("true", StringComparison.OrdinalIgnoreCase);
-                }
-
-                bool enablePermalock = false;
-                if (config.Parameters.TryGetValue("enablePermalock", out var permalockStr))
-                {
-                    enablePermalock = bool.TryParse(permalockStr, out bool parsedPermalock) ? parsedPermalock :
-                                     permalockStr.Equals("true", StringComparison.OrdinalIgnoreCase);
-                }
-
-                // Create dictionary for reader settings
-                var settingsDict = new Dictionary<string, ReaderSettings>();
-                if (config.ReaderSettingsGroup.Detector != null)
-                    settingsDict["detector"] = config.ReaderSettingsGroup.Detector;
-                if (config.ReaderSettingsGroup.Writer != null)
-                    settingsDict["writer"] = config.ReaderSettingsGroup.Writer;
-                if (config.ReaderSettingsGroup.Verifier != null)
-                    settingsDict["verifier"] = config.ReaderSettingsGroup.Verifier;
-
-                // Create the strategy instance based on the type
-                if (strategyType == typeof(MultiReaderEnduranceStrategy) ||
-                    strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
-                {
-                    // This strategy uses three different readers
-                    string detectorHostname = config.ReaderSettingsGroup.Detector.Hostname;
-                    string writerHostname = config.ReaderSettingsGroup.Writer.Hostname;
-                    string verifierHostname = config.ReaderSettingsGroup.Verifier.Hostname;
-
-                    // Check if the strategy class has constructor parameters for lock/permalock
-                    var constructor = strategyType.GetConstructor(new Type[] {
-                typeof(string), typeof(string), typeof(string),
-                typeof(string), typeof(Dictionary<string, ReaderSettings>),
-                typeof(bool), typeof(bool) // Lock parameters
-            });
-
-                    if (constructor != null)
-                    {
-                        // If the constructor accepts lock parameters, use them
-                        return (IJobStrategy)Activator.CreateInstance(
-                            strategyType,
-                            detectorHostname,
-                            writerHostname,
-                            verifierHostname,
-                            logFilePath,
-                            settingsDict,
-                            enableLock,
-                            enablePermalock);
-                    }
-                    else
-                    {
-                        // Use the standard constructor without lock parameters
-                        return (IJobStrategy)Activator.CreateInstance(
-                            strategyType,
-                            detectorHostname,
-                            writerHostname,
-                            verifierHostname,
-                            logFilePath,
-                            settingsDict);
-                    }
-                }
-                else if (strategyType == typeof(CheckBoxStrategy) ||
-                         strategyType.Name == "CheckBoxStrategy")
-                {
-                    // This strategy only uses one reader (the writer hostname) but now needs lock parameters
-                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
-
-                    return (IJobStrategy)Activator.CreateInstance(
-                        strategyType,
-                        hostname,
-                        logFilePath,
-                        settingsDict,
-                        epcHeader,
-                        sku,
-                        encodingMethod,
-                        partitionValue,
-                        itemReference,
-                        enableLock,         // Pass the enableLock parameter
-                        enablePermalock);   // Pass the enablePermalock parameter
-                }
-                else if (strategyType == typeof(ReadOnlyLoggingStrategy) ||
-                         strategyType.Name == "ReadOnlyLoggingStrategy")
-                {
-                    // Special case for ReadOnlyLoggingStrategy - it expects writer hostname
-                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
-                    return (IJobStrategy)Activator.CreateInstance(
-                        strategyType,
-                        hostname,
-                        logFilePath,
-                        settingsDict);
-                }
-                else
-                {
-                    // Default constructor pattern for most strategies
-                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
-                    return (IJobStrategy)Activator.CreateInstance(
-                        strategyType,
-                        hostname,
-                        logFilePath,
-                        settingsDict);
-                }
+                // Create the strategy and pass the jobId
+                return strategyFactory.CreateStrategy(config.StrategyType, config, jobId);
             }
             catch (Exception ex)
             {

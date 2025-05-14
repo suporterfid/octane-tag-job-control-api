@@ -5,6 +5,7 @@ using System.Threading;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagWritingTest.Helpers;
+using OctaneTagJobControlAPI.Services;
 
 namespace OctaneTagJobControlAPI.Strategies.Base
 {
@@ -13,6 +14,8 @@ namespace OctaneTagJobControlAPI.Strategies.Base
     /// </summary>
     public abstract class JobStrategyBase : IJobStrategy
     {
+        private string _currentJobId;
+        private JobManager _jobManager;
         protected readonly string logFile;
         protected readonly Dictionary<string, ReaderSettings> settings;
         protected CancellationToken cancellationToken;
@@ -33,6 +36,22 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 Directory.CreateDirectory(logDirectory);
             }
+        }
+
+        public void SetJobManager(JobManager jobManager)
+        {
+            _jobManager = jobManager;
+        }
+
+        public void SetJobId(string jobId)
+        {
+            _currentJobId = jobId;
+        }
+
+        protected void ReportTagData(TagReadData tagData)
+        {
+            if (string.IsNullOrEmpty(_currentJobId) || _jobManager == null) return;
+            _jobManager.ReportTagData(_currentJobId, tagData);
         }
 
         /// <summary>

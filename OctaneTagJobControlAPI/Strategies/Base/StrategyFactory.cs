@@ -7,6 +7,7 @@ using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
+using OctaneTagJobControlAPI.Services;
 
 
 namespace OctaneTagJobControlAPI.Strategies
@@ -19,17 +20,23 @@ namespace OctaneTagJobControlAPI.Strategies
         private readonly ILogger<StrategyFactory> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly Dictionary<string, Type> _strategyTypes;
+        private readonly JobManager _jobManager;
 
         /// <summary>
         /// Initializes a new instance of the StrategyFactory class
         /// </summary>
         /// <param name="logger">Logger instance</param>
         /// <param name="serviceProvider">Service provider for dependency injection</param>
-        public StrategyFactory(ILogger<StrategyFactory> logger, IServiceProvider serviceProvider)
+        /// <param name="jobManager">Job manager for dependency injection</param>
+        public StrategyFactory(
+            ILogger<StrategyFactory> logger,
+            IServiceProvider serviceProvider,
+            JobManager jobManager)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _strategyTypes = DiscoverStrategyTypes();
+            _jobManager = jobManager;
         }
 
         /// <summary>
@@ -47,7 +54,7 @@ namespace OctaneTagJobControlAPI.Strategies
         /// <param name="strategyName">Name of the strategy to create</param>
         /// <param name="config">Configuration for the strategy</param>
         /// <returns>The created strategy instance</returns>
-        public IJobStrategy CreateStrategy(string strategyName, StrategyConfiguration config)
+        public IJobStrategy CreateStrategy(string strategyName, StrategyConfiguration config, string jobId = null)
         {
             if (!_strategyTypes.TryGetValue(strategyName, out var strategyType))
             {
@@ -58,22 +65,36 @@ namespace OctaneTagJobControlAPI.Strategies
 
             try
             {
+                IJobStrategy strategy;
+
                 // Create strategy based on its requirements
                 if (typeof(MultiReaderStrategyBase).IsAssignableFrom(strategyType))
                 {
                     _logger.LogInformation("Creating multi-reader strategy: {StrategyName}", strategyName);
-                    return CreateMultiReaderStrategy(strategyType, config);
+                    strategy = CreateMultiReaderStrategy(strategyType, config);
                 }
                 else if (strategyName == "CheckBoxStrategy")
                 {
                     _logger.LogInformation("Creating CheckBox strategy");
-                    return CreateCheckBoxStrategy(strategyType, config);
+                    strategy = CreateCheckBoxStrategy(strategyType, config);
                 }
                 else
                 {
                     _logger.LogInformation("Creating single-reader strategy: {StrategyName}", strategyName);
-                    return CreateSingleReaderStrategy(strategyType, config);
+                    strategy = CreateSingleReaderStrategy(strategyType, config);
                 }
+
+                // Set up the strategy with JobId and JobManager (new code)
+                if (strategy is JobStrategyBase baseStrategy)
+                {
+                    if (!string.IsNullOrEmpty(jobId))
+                    {
+                        baseStrategy.SetJobId(jobId);
+                    }
+                    baseStrategy.SetJobManager(_jobManager);
+                }
+
+                return strategy;
             }
             catch (Exception ex)
             {
