@@ -149,7 +149,7 @@ Handles batch processing of tag serialization operations. Supports configurable 
 Single-reader strategy for tag verification and encoding. Reads tags during a configurable period, confirms tag count, and writes new EPCs based on selected encoding method.
 
 ### MultiReaderEnduranceStrategy
-Dual-reader strategy for endurance testing. Uses separate readers for reading and writing operations, supporting continuous testing scenarios. Features:
+Multi-reader strategy for endurance testing that can utilize up to three readers (detector, writer, and verifier). Uses separate readers for reading, writing and verifying operations, supporting continuous testing scenarios. Features:
 - Optional tag locking/permalocking
 - Cycle count tracking
 - Performance metrics for write, verify, and lock operations
