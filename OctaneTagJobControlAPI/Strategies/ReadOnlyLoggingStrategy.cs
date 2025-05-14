@@ -36,7 +36,7 @@ namespace OctaneTagJobControlAPI.Strategies
         public ReadOnlyLoggingStrategy(
             string hostname,
             string logFile,
-            Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> readerSettings)
+            Dictionary<string, ReaderSettings> readerSettings)
             : base(hostname, logFile, readerSettings)
         {
             _status.CurrentOperation = "Initialized";

@@ -25,7 +25,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         protected SingleReaderStrategyBase(
             string hostname,
             string logFile,
-            Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> settings)
+            Dictionary<string, ReaderSettings> settings)
             : base(logFile, settings)
         {
             this.hostname = hostname;
@@ -93,7 +93,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// </summary>
         /// <param name="role">The role of the reader (e.g., "writer", "detector", "verifier")</param>
         /// <returns>The settings for the specified role</returns>
-        protected OctaneTagWritingTest.RfidDeviceSettings GetSettingsForRole(string role)
+        protected ReaderSettings GetSettingsForRole(string role)
         {
             if (!settings.ContainsKey(role))
             {

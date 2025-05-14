@@ -343,7 +343,7 @@ namespace OctaneTagJobControlAPI.Services
                 }
 
                 // Convert the reader settings to the format expected by the strategy
-                var readerSettings = ConvertReaderSettings(config.ReaderSettings);
+                var readerSettings = config.ReaderSettings; // ConvertReaderSettings(config.ReaderSettings);
 
                 // Extract common parameters
                 string logFilePath = config.LogFilePath;
@@ -468,31 +468,31 @@ namespace OctaneTagJobControlAPI.Services
         /// <summary>
         /// Convert our API ReaderSettings to the Dictionary format expected by the strategies
         /// </summary>
-        private Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> ConvertReaderSettings(
-     ReaderSettingsGroup settingsGroup)
-        {
-            var result = new Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings>();
+    //    private Dictionary<string, ReaderSettings> ConvertReaderSettings(
+    //ReaderSettingsGroup settingsGroup)
+    //    {
+    //        var result = new Dictionary<string, ReaderSettings>();
 
-            // Convert Detector settings
-            if (settingsGroup.Detector != null)
-            {
-                result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
-            }
+    //        // Convert Detector settings
+    //        if (settingsGroup.Detector != null)
+    //        {
+    //            result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
+    //        }
 
-            // Convert Writer settings
-            if (settingsGroup.Writer != null)
-            {
-                result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
-            }
+    //        // Convert Writer settings
+    //        if (settingsGroup.Writer != null)
+    //        {
+    //            result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
+    //        }
 
-            // Convert Verifier settings
-            if (settingsGroup.Verifier != null)
-            {
-                result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
-            }
+    //        // Convert Verifier settings
+    //        if (settingsGroup.Verifier != null)
+    //        {
+    //            result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
+    //        }
 
-            return result;
-        }
+    //        return result;
+    //    }
 
         /// <summary>
         /// Start a timer to periodically update job status

@@ -14,7 +14,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
     public abstract class JobStrategyBase : IJobStrategy
     {
         protected readonly string logFile;
-        protected readonly Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> settings;
+        protected readonly Dictionary<string, ReaderSettings> settings;
         protected CancellationToken cancellationToken;
 
         /// <summary>
@@ -22,7 +22,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// </summary>
         /// <param name="logFile">The path to the log file</param>
         /// <param name="settings">Dictionary of reader settings</param>
-        protected JobStrategyBase(string logFile, Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> settings)
+        protected JobStrategyBase(string logFile, Dictionary<string, ReaderSettings> settings)
         {
             this.logFile = logFile;
             this.settings = settings;
