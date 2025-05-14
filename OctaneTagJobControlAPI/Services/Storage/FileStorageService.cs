@@ -772,6 +772,8 @@ namespace OctaneTagJobControlAPI.Services.Storage
                         try
                         {
                             var json = await File.ReadAllTextAsync(file);
+                            // Fix reader settings names if missing
+                            json = FixReaderSettingsNames(json);
                             var config = JsonSerializer.Deserialize<JobConfiguration>(json, _jsonOptions);
 
                             if (config != null)
@@ -799,6 +801,17 @@ namespace OctaneTagJobControlAPI.Services.Storage
         #endregion
 
         #region Helper Methods
+
+        private string FixReaderSettingsNames(string json)
+        {
+            // Simple string replacement approach to fix missing names
+            json = json.Replace("\"name\":\"\"", "\"name\":\"default\"");
+            json = json.Replace("\"name\": \"\"", "\"name\": \"default\"");
+            json = json.Replace("\"name\":null", "\"name\":\"default\"");
+            json = json.Replace("\"name\": null", "\"name\": \"default\"");
+
+            return json;
+        }
 
         private string GetJobFilePath(string jobId)
         {

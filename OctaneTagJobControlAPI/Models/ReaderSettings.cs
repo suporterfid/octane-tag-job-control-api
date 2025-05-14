@@ -20,9 +20,7 @@ namespace OctaneTagJobControlAPI.Models
             get => name;
             set
             {
-                if (string.IsNullOrWhiteSpace(value))
-                    throw new ArgumentException("Settings name cannot be empty or whitespace");
-                name = value;
+                name = string.IsNullOrWhiteSpace(value) ? "default" : value;
             }
         }
 

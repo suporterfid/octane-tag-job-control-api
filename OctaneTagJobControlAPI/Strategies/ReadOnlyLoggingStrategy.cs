@@ -125,8 +125,7 @@ namespace OctaneTagJobControlAPI.Strategies
                         {
                             { "FastID", tag.IsFastIdPresent },
                             { "Phase", tag.PhaseAngleInRadians },
-                            { "ChannelInMhz", tag.ChannelInMhz },
-                            { "TagReadCount",_tagReadCounts[tidHex]}
+                            { "ChannelInMhz", tag.ChannelInMhz }
                         }
                 });
 
