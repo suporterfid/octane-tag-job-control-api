@@ -4,6 +4,9 @@ using OctaneTagJobControlAPI.Services;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
+    /// <summary>
+    /// Controller for managing job configurations.
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class ConfigurationController : ControllerBase
@@ -11,6 +14,11 @@ namespace OctaneTagJobControlAPI.Controllers
         private readonly ILogger<ConfigurationController> _logger;
         private readonly JobConfigurationService _configService;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ConfigurationController"/> class.
+        /// </summary>
+        /// <param name="logger">The logger instance.</param>
+        /// <param name="configService">The job configuration service.</param>
         public ConfigurationController(
             ILogger<ConfigurationController> logger,
             JobConfigurationService configService)
@@ -19,6 +27,10 @@ namespace OctaneTagJobControlAPI.Controllers
             _configService = configService;
         }
 
+        /// <summary>
+        /// Gets all job configurations.
+        /// </summary>
+        /// <returns>A list of job configurations.</returns>
         [HttpGet]
         [ProducesResponseType(typeof(List<JobConfiguration>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetAllConfigurations()
@@ -27,6 +39,11 @@ namespace OctaneTagJobControlAPI.Controllers
             return Ok(configs);
         }
 
+        /// <summary>
+        /// Gets a job configuration by ID.
+        /// </summary>
+        /// <param name="id">The ID of the job configuration.</param>
+        /// <returns>The job configuration if found; otherwise, a 404 response.</returns>
         [HttpGet("{id}")]
         [ProducesResponseType(typeof(JobConfiguration), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -45,6 +62,11 @@ namespace OctaneTagJobControlAPI.Controllers
             return Ok(config);
         }
 
+        /// <summary>
+        /// Creates a new job configuration.
+        /// </summary>
+        /// <param name="config">The job configuration to create.</param>
+        /// <returns>The created job configuration.</returns>
         [HttpPost]
         [ProducesResponseType(typeof(JobConfiguration), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -70,6 +92,12 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Updates an existing job configuration.
+        /// </summary>
+        /// <param name="id">The ID of the job configuration to update.</param>
+        /// <param name="config">The updated job configuration.</param>
+        /// <returns>The updated job configuration if successful; otherwise, an error response.</returns>
         [HttpPut("{id}")]
         [ProducesResponseType(typeof(JobConfiguration), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -110,6 +138,11 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Deletes a job configuration by ID.
+        /// </summary>
+        /// <param name="id">The ID of the job configuration to delete.</param>
+        /// <returns>No content if successful; otherwise, an error response.</returns>
         [HttpDelete("{id}")]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -4,6 +4,9 @@ using OctaneTagJobControlAPI.Services;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
+    /// <summary>
+    /// Controller for managing RFID job operations.
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class JobController : ControllerBase
@@ -12,6 +15,12 @@ namespace OctaneTagJobControlAPI.Controllers
         private readonly JobManager _jobManager;
         private readonly JobConfigurationService _configService;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="JobController"/> class.
+        /// </summary>
+        /// <param name="logger">The logger instance.</param>
+        /// <param name="jobManager">The job manager service.</param>
+        /// <param name="configService">The job configuration service.</param>
         public JobController(
             ILogger<JobController> logger,
             JobManager jobManager,
@@ -22,6 +31,12 @@ namespace OctaneTagJobControlAPI.Controllers
             _configService = configService;
         }
 
+        /// <summary>
+        /// Gets all jobs with optional sorting parameters.
+        /// </summary>
+        /// <param name="sortBy">Sort criteria: "date" (default), "name", "status", or "progress".</param>
+        /// <param name="runningFirst">If true, running jobs will be listed first.</param>
+        /// <returns>A sorted list of job statuses.</returns>
         [HttpGet]
         [ProducesResponseType(typeof(List<JobStatus>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetAllJobs(
@@ -87,6 +102,11 @@ namespace OctaneTagJobControlAPI.Controllers
             return Ok(sortedJobs);
         }
 
+        /// <summary>
+        /// Gets a specific job by its ID.
+        /// </summary>
+        /// <param name="jobId">The ID of the job to retrieve.</param>
+        /// <returns>The job status if found; otherwise, a 404 response.</returns>
         [HttpGet("{jobId}")]
         [ProducesResponseType(typeof(JobStatus), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -105,6 +125,11 @@ namespace OctaneTagJobControlAPI.Controllers
             return Ok(job);
         }
 
+        /// <summary>
+        /// Creates a new job with the specified configuration.
+        /// </summary>
+        /// <param name="request">The job creation request containing configuration details.</param>
+        /// <returns>The created job information if successful; otherwise, an error response.</returns>
         [HttpPost]
         [ProducesResponseType(typeof(JobCreatedResponse), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -174,6 +199,12 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Starts a specific job.
+        /// </summary>
+        /// <param name="jobId">The ID of the job to start.</param>
+        /// <param name="request">Optional start parameters including timeout.</param>
+        /// <returns>The updated job status if successful; otherwise, an error response.</returns>
         [HttpPost("{jobId}/start")]
         [ProducesResponseType(typeof(ApiResponse<JobStatus>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -237,6 +268,11 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Stops a running job.
+        /// </summary>
+        /// <param name="jobId">The ID of the job to stop.</param>
+        /// <returns>The updated job status if successful; otherwise, an error response.</returns>
         [HttpPost("{jobId}/stop")]
         [ProducesResponseType(typeof(ApiResponse<JobStatus>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -299,6 +335,11 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Gets metrics for a specific job.
+        /// </summary>
+        /// <param name="jobId">The ID of the job.</param>
+        /// <returns>The job metrics if found; otherwise, a 404 response.</returns>
         [HttpGet("{jobId}/metrics")]
         [ProducesResponseType(typeof(JobMetricsResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -324,6 +365,12 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets log entries for a specific job.
+        /// </summary>
+        /// <param name="jobId">The ID of the job.</param>
+        /// <param name="maxEntries">Maximum number of log entries to return (default: 100).</param>
+        /// <returns>The job logs if found; otherwise, a 404 response.</returns>
         [HttpGet("{jobId}/logs")]
         [ProducesResponseType(typeof(JobLogResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -349,6 +396,10 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets a list of available job strategies.
+        /// </summary>
+        /// <returns>A dictionary of strategy types and their descriptions.</returns>
         [HttpGet("strategies")]
         [ProducesResponseType(typeof(Dictionary<string, string>), StatusCodes.Status200OK)]
         public IActionResult GetAvailableStrategies()

@@ -10,6 +10,9 @@ using System.IO;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
+    /// <summary>
+    /// Controller for managing system status, health, and monitoring.
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class StatusController : ControllerBase
@@ -29,6 +32,10 @@ namespace OctaneTagJobControlAPI.Controllers
             _environment = environment;
         }
 
+        /// <summary>
+        /// Gets the current system status including version, uptime, and resource usage information.
+        /// </summary>
+        /// <returns>A comprehensive system status report.</returns>
         [HttpGet]
         [ProducesResponseType(typeof(ApiResponse<Dictionary<string, object>>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetStatus()
@@ -105,6 +112,10 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets detailed version information about the API.
+        /// </summary>
+        /// <returns>Version information including assembly, file, and product versions.</returns>
         [HttpGet("version")]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
         public IActionResult GetVersion()
@@ -130,6 +141,10 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets information about connected RFID readers.
+        /// </summary>
+        /// <returns>A list of connected readers with their status and details.</returns>
         [HttpGet("readers")]
         [ProducesResponseType(typeof(ApiResponse<List<object>>), StatusCodes.Status200OK)]
         public IActionResult GetConnectedReaders()
@@ -167,6 +182,10 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets detailed system metrics including CPU usage, memory, and performance statistics.
+        /// </summary>
+        /// <returns>A collection of system metrics and performance indicators.</returns>
         [HttpGet("metrics")]
         [ProducesResponseType(typeof(ApiResponse<Dictionary<string, object>>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetMetrics()
@@ -247,6 +266,10 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets the current health status of the system.
+        /// </summary>
+        /// <returns>Health status of various system components. Returns 503 if the system is unhealthy.</returns>
         [HttpGet("health")]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status503ServiceUnavailable)]
@@ -302,6 +325,11 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Gets recent system log entries.
+        /// </summary>
+        /// <param name="maxEntries">Maximum number of log entries to return (default: 100).</param>
+        /// <returns>Recent system log entries from available log files.</returns>
         [HttpGet("logs")]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
         public IActionResult GetSystemLogs([FromQuery] int maxEntries = 100)
@@ -355,8 +383,15 @@ namespace OctaneTagJobControlAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Gets a list of files and directories in the specified path.
+        /// </summary>
+        /// <param name="path">The relative path to list contents from (default: root directory).</param>
+        /// <returns>List of files and directories in the specified path.</returns>
         [HttpGet("files")]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
         public IActionResult GetSystemFiles([FromQuery] string path = "")
         {
             try

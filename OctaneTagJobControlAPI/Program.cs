@@ -27,6 +27,11 @@ builder.Services.AddSwaggerGen(c =>
         Version = "v1",
         Description = "API for controlling RFID job operations"
     });
+
+    // Set the comments path for the Swagger JSON and UI
+    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    c.IncludeXmlComments(xmlPath);
 });
 
 // Configure persistence services
