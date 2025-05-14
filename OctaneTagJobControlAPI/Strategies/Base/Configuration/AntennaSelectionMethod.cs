@@ -1,4 +1,4 @@
-﻿namespace OctaneTagJobControlAPI.JobStrategies.Base.Configuration
+﻿namespace OctaneTagJobControlAPI.Strategies.Base.Configuration
 {
     // <summary>
     /// Method for selecting the best antenna

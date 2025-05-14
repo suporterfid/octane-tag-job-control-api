@@ -6,8 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Impinj.OctaneSdk;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
-using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using OctaneTagJobControlAPI.Models;
@@ -36,7 +36,7 @@ namespace OctaneTagJobControlAPI.Strategies
         public ReadOnlyLoggingStrategy(
             string hostname,
             string logFile,
-            Dictionary<string, ReaderSettings> readerSettings)
+            Dictionary<string, OctaneTagWritingTest.RfidDeviceSettings> readerSettings)
             : base(hostname, logFile, readerSettings)
         {
             _status.CurrentOperation = "Initialized";

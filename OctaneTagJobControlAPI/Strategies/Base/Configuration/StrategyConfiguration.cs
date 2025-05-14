@@ -1,6 +1,6 @@
 ﻿using OctaneTagJobControlAPI.Models;
 
-namespace OctaneTagJobControlAPI.JobStrategies.Base.Configuration
+namespace OctaneTagJobControlAPI.Strategies.Base.Configuration
 {
     /// <summary>
     /// Base configuration for all strategies

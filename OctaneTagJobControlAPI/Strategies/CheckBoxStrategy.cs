@@ -8,11 +8,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Impinj.OctaneSdk;
 using Impinj.TagUtils;
-using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using OctaneTagJobControlAPI.Models;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 
 namespace OctaneTagJobControlAPI.Strategies
 {

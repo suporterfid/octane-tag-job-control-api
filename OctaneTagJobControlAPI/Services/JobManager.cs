@@ -2,7 +2,7 @@
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Repositories;
 using OctaneTagWritingTest;
-using OctaneTagJobControlAPI.JobStrategies;
+using OctaneTagJobControlAPI.Strategies;
 using OctaneTagWritingTest.Helpers;
 using System;
 using System.Collections.Concurrent;
@@ -14,7 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using OctaneTagJobControlAPI.Strategies;
 using OctaneTagJobControlAPI.Extensions;
-using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base;
 
 namespace OctaneTagJobControlAPI.Services
 {

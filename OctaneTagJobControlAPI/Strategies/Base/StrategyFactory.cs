@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
-using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
 

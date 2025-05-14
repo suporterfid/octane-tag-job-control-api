@@ -1,4 +1,4 @@
-﻿namespace OctaneTagJobControlAPI.JobStrategies.Base
+﻿namespace OctaneTagJobControlAPI.Strategies.Base
 {
     /// <summary>
     /// Capabilities that a strategy supports

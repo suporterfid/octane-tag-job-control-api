@@ -1,4 +1,4 @@
-﻿namespace OctaneTagJobControlAPI.JobStrategies.Base
+﻿namespace OctaneTagJobControlAPI.Strategies.Base
 {
     /// <summary>
     /// Core interface for all job strategies

@@ -7,13 +7,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Impinj.OctaneSdk;
-using OctaneTagJobControlAPI.JobStrategies.Base;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
+using OctaneTagJobControlAPI.Strategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 
-namespace OctaneTagJobControlAPI.JobStrategies
+namespace OctaneTagJobControlAPI.Strategies
 {
     /// <summary>
     /// Strategy for batch serializing and optionally permalocking tags efficiently

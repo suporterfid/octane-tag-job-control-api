@@ -137,6 +137,7 @@ namespace OctaneTagJobControlAPI.Controllers
                 {
                     Id = Guid.NewGuid().ToString(),
                     Name = request.Name,
+                    ConfigurationId = request.ConfigurationId,
                     StrategyType = request.StrategyType,
                     ReaderSettings = request.ReaderSettings,
                     Parameters = request.Parameters

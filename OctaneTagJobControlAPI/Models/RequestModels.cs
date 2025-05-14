@@ -4,6 +4,8 @@
     {
         public string Name { get; set; } = string.Empty;
         public string StrategyType { get; set; } = string.Empty;
+        public string ConfigurationId { get; set; } = string.Empty;
+
         public ReaderSettingsGroup ReaderSettings { get; set; } = new ReaderSettingsGroup();
         public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
     }

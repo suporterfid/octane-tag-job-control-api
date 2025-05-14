@@ -5,14 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Impinj.OctaneSdk;
-using OctaneTagJobControlAPI.JobStrategies.Base.Configuration;
-using OctaneTagJobControlAPI.JobStrategies.Base;
+using OctaneTagJobControlAPI.Strategies.Base.Configuration;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using Org.LLRP.LTK.LLRPV1.Impinj;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Models;
 
-namespace OctaneTagJobControlAPI.JobStrategies
+namespace OctaneTagJobControlAPI.Strategies
 {
     /// <summary>
     /// Dual-reader endurance strategy.

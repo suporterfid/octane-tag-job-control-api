@@ -1,4 +1,4 @@
-﻿namespace OctaneTagJobControlAPI.JobStrategies.Base
+﻿namespace OctaneTagJobControlAPI.Strategies.Base
 {
     /// <summary>
     /// Status of job execution

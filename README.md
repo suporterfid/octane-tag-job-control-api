@@ -5,11 +5,19 @@ A RESTful API service for managing and controlling RFID job operations. This API
 ## Features
 
 - REST API for remote job control
-- Support for all existing job strategies
+- Multiple job strategies for different RFID operations:
+  - BatchSerializationStrategy: Batch processing of tag serialization
+  - CheckBoxStrategy: Single-reader tag verification and encoding
+  - MultiReaderEnduranceStrategy: Dual-reader endurance testing
+  - ReadOnlyLoggingStrategy: Non-invasive tag monitoring
+  - SpeedTestStrategy: Performance testing of tag operations
 - Real-time job status monitoring
 - Centralized configuration management
 - Detailed job metrics and logs
 - Swagger UI for API documentation and testing
+- Support for multiple reader configurations
+- Tag operation tracking and logging
+- EPC list generation utilities
 
 ## Getting Started
 
@@ -17,6 +25,7 @@ A RESTful API service for managing and controlling RFID job operations. This API
 
 - .NET 8.0 SDK or Docker
 - Existing RFID reader infrastructure
+- Compatible Impinj RFID readers
 
 ### Building and Running the API
 
@@ -31,7 +40,7 @@ cd octane-tag-job-control-api
 dotnet build
 
 # Run the API
-cd JobControlAPI
+cd OctaneTagJobControlAPI
 dotnet run
 ```
 
@@ -80,6 +89,23 @@ Once running, the API is available at:
 - `GET /api/status/readers` - Get connected readers
 - `GET /api/status/metrics` - Get system metrics
 
+## Job Strategies
+
+### BatchSerializationStrategy
+Handles batch processing of tag serialization operations. Supports configurable batch sizes and serialization patterns.
+
+### CheckBoxStrategy
+Single-reader strategy for tag verification and encoding. Reads tags during a configurable period, confirms tag count, and writes new EPCs based on selected encoding method.
+
+### MultiReaderEnduranceStrategy
+Dual-reader strategy for endurance testing. Uses separate readers for reading and writing operations, supporting continuous testing scenarios.
+
+### ReadOnlyLoggingStrategy
+Non-invasive monitoring strategy that reads and logs tag information without modification. Ideal for inventory and monitoring applications.
+
+### SpeedTestStrategy
+Performance testing strategy for evaluating tag operation speed and reliability.
+
 ## Example Usage
 
 ### Creating a Job
@@ -89,9 +115,9 @@ curl -X POST "http://localhost:5000/api/job" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Job1",
-    "strategyType": "JobStrategy1SpeedStrategy",
+    "strategyType": "ReadOnlyLoggingStrategy",
     "readerSettings": {
-      "writer": {
+      "reader": {
         "hostname": "192.168.1.100",
         "txPowerInDbm": 33
       }
@@ -133,14 +159,24 @@ The API is built with ASP.NET Core and follows a clean architecture pattern:
 - **Services:** Implement business logic and job management
 - **Models:** Define data structures for API operations
 - **Background Services:** Manage long-running operations
+- **Job Strategies:** Implement specific RFID operation patterns
+- **Storage Services:** Handle data persistence and logging
+- **Utilities:** Provide helper functions and EPC generation tools
+
+## Project Structure
+
+- **OctaneTagJobControlAPI:** Main API implementation
+- **EpcListGenerator:** Utility for generating EPC lists
+- **TagUtils:** Common tag-related utilities and helpers
 
 ## Extending the API
 
 To add a new job strategy:
 
-1. Create a new class that implements `IJobStrategy` in the OctaneTagWritingTest project
-2. Implement the `RunJob` method with your custom logic
-3. The new strategy will automatically be available through the API
+1. Create a new class that implements `IJobStrategy` in the JobStrategies directory
+2. Implement the required interface methods
+3. Add appropriate configuration and validation logic
+4. The new strategy will automatically be available through the API
 
 ## License
 

@@ -53,6 +53,7 @@ namespace OctaneTagJobControlAPI.Repositories
             {
                 // Generate new job ID if not provided
                 string jobId = config.Id ?? Guid.NewGuid().ToString();
+                
 
                 // Create a new job status
                 var status = new JobStatus
@@ -60,6 +61,7 @@ namespace OctaneTagJobControlAPI.Repositories
                     JobId = jobId,
                     JobName = config.Name,
                     State = JobState.NotStarted,
+                    ConfigurationId = config.ConfigurationId,
                     StartTime = null,
                     EndTime = null,
                     CurrentOperation = "Initialized",
