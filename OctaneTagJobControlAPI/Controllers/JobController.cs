@@ -139,7 +139,7 @@ namespace OctaneTagJobControlAPI.Controllers
                     Name = request.Name,
                     ConfigurationId = request.ConfigurationId,
                     StrategyType = request.StrategyType,
-                    ReaderSettings = request.ReaderSettings,
+                    ReaderSettingsGroup = request.ReaderSettings,
                     Parameters = request.Parameters
                 };
 

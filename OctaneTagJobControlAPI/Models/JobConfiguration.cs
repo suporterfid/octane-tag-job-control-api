@@ -13,7 +13,7 @@ namespace OctaneTagJobControlAPI.Models
 
         public string ConfigurationId { get; set; } = string.Empty;
       
-        public ReaderSettingsGroup ReaderSettings { get; set; } = new ReaderSettingsGroup();
+        public ReaderSettingsGroup ReaderSettingsGroup { get; set; } = new ReaderSettingsGroup();
         public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }

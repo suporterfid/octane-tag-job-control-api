@@ -325,7 +325,6 @@ namespace OctaneTagJobControlAPI.Services
         // In OctaneTagJobControlAPI/Services/JobManager.cs
         // Look for the CreateJobStrategyAsync method (around line 265)
         // Update the method to extract lock/permalock parameters and pass them to CheckBoxStrategy
-
         private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config)
         {
             try
@@ -341,9 +340,8 @@ namespace OctaneTagJobControlAPI.Services
                     _logger.LogError("Strategy type {StrategyType} not found", config.StrategyType);
                     return null;
                 }
-
-                // Convert the reader settings to the format expected by the strategy
-                var readerSettings = config.ReaderSettings; // ConvertReaderSettings(config.ReaderSettings);
+                // Convert ReaderSettingsGroup to Dictionary using extension method
+                var readerSettings = config.ReaderSettingsGroup.ToDictionary();
 
                 // Extract common parameters
                 string logFilePath = config.LogFilePath;
@@ -383,25 +381,30 @@ namespace OctaneTagJobControlAPI.Services
                                      permalockStr.Equals("true", StringComparison.OrdinalIgnoreCase);
                 }
 
-                // Log the lock settings
-                _logger.LogInformation("Lock settings for strategy {StrategyType}: Lock={EnableLock}, Permalock={EnablePermalock}",
-                    config.StrategyType, enableLock, enablePermalock);
+                // Create dictionary for reader settings
+                var settingsDict = new Dictionary<string, ReaderSettings>();
+                if (config.ReaderSettingsGroup.Detector != null)
+                    settingsDict["detector"] = config.ReaderSettingsGroup.Detector;
+                if (config.ReaderSettingsGroup.Writer != null)
+                    settingsDict["writer"] = config.ReaderSettingsGroup.Writer;
+                if (config.ReaderSettingsGroup.Verifier != null)
+                    settingsDict["verifier"] = config.ReaderSettingsGroup.Verifier;
 
                 // Create the strategy instance based on the type
                 if (strategyType == typeof(MultiReaderEnduranceStrategy) ||
                     strategyType.Name == "JobStrategy8MultipleReaderEnduranceStrategy")
-                                {
-                                    // This strategy uses three different readers
-                                    string detectorHostname = config.ReaderSettings.Detector.Hostname;
-                                    string writerHostname = config.ReaderSettings.Writer.Hostname;
-                                    string verifierHostname = config.ReaderSettings.Verifier.Hostname;
+                {
+                    // This strategy uses three different readers
+                    string detectorHostname = config.ReaderSettingsGroup.Detector.Hostname;
+                    string writerHostname = config.ReaderSettingsGroup.Writer.Hostname;
+                    string verifierHostname = config.ReaderSettingsGroup.Verifier.Hostname;
 
-                                    // Check if the strategy class has constructor parameters for lock/permalock
-                                    var constructor = strategyType.GetConstructor(new Type[] {
-                        typeof(string), typeof(string), typeof(string),
-                        typeof(string), typeof(Dictionary<string, ReaderSettings>),
-                        typeof(bool), typeof(bool) // Lock parameters
-                    });
+                    // Check if the strategy class has constructor parameters for lock/permalock
+                    var constructor = strategyType.GetConstructor(new Type[] {
+                typeof(string), typeof(string), typeof(string),
+                typeof(string), typeof(Dictionary<string, ReaderSettings>),
+                typeof(bool), typeof(bool) // Lock parameters
+            });
 
                     if (constructor != null)
                     {
@@ -412,7 +415,7 @@ namespace OctaneTagJobControlAPI.Services
                             writerHostname,
                             verifierHostname,
                             logFilePath,
-                            readerSettings,
+                            settingsDict,
                             enableLock,
                             enablePermalock);
                     }
@@ -425,20 +428,20 @@ namespace OctaneTagJobControlAPI.Services
                             writerHostname,
                             verifierHostname,
                             logFilePath,
-                            readerSettings);
+                            settingsDict);
                     }
                 }
                 else if (strategyType == typeof(CheckBoxStrategy) ||
                          strategyType.Name == "CheckBoxStrategy")
                 {
                     // This strategy only uses one reader (the writer hostname) but now needs lock parameters
-                    string hostname = config.ReaderSettings.Writer.Hostname;
+                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
 
                     return (IJobStrategy)Activator.CreateInstance(
                         strategyType,
                         hostname,
                         logFilePath,
-                        readerSettings,
+                        settingsDict,
                         epcHeader,
                         sku,
                         encodingMethod,
@@ -447,15 +450,26 @@ namespace OctaneTagJobControlAPI.Services
                         enableLock,         // Pass the enableLock parameter
                         enablePermalock);   // Pass the enablePermalock parameter
                 }
-                else
+                else if (strategyType == typeof(ReadOnlyLoggingStrategy) ||
+                         strategyType.Name == "ReadOnlyLoggingStrategy")
                 {
-                    // Default constructor pattern for most strategies
-                    string hostname = config.ReaderSettings.Writer.Hostname;
+                    // Special case for ReadOnlyLoggingStrategy - it expects writer hostname
+                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
                     return (IJobStrategy)Activator.CreateInstance(
                         strategyType,
                         hostname,
                         logFilePath,
-                        readerSettings);
+                        settingsDict);
+                }
+                else
+                {
+                    // Default constructor pattern for most strategies
+                    string hostname = config.ReaderSettingsGroup.Writer.Hostname;
+                    return (IJobStrategy)Activator.CreateInstance(
+                        strategyType,
+                        hostname,
+                        logFilePath,
+                        settingsDict);
                 }
             }
             catch (Exception ex)
@@ -468,31 +482,31 @@ namespace OctaneTagJobControlAPI.Services
         /// <summary>
         /// Convert our API ReaderSettings to the Dictionary format expected by the strategies
         /// </summary>
-    //    private Dictionary<string, ReaderSettings> ConvertReaderSettings(
-    //ReaderSettingsGroup settingsGroup)
-    //    {
-    //        var result = new Dictionary<string, ReaderSettings>();
+        //    private Dictionary<string, ReaderSettings> ConvertReaderSettings(
+        //ReaderSettingsGroup settingsGroup)
+        //    {
+        //        var result = new Dictionary<string, ReaderSettings>();
 
-    //        // Convert Detector settings
-    //        if (settingsGroup.Detector != null)
-    //        {
-    //            result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
-    //        }
+        //        // Convert Detector settings
+        //        if (settingsGroup.Detector != null)
+        //        {
+        //            result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
+        //        }
 
-    //        // Convert Writer settings
-    //        if (settingsGroup.Writer != null)
-    //        {
-    //            result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
-    //        }
+        //        // Convert Writer settings
+        //        if (settingsGroup.Writer != null)
+        //        {
+        //            result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
+        //        }
 
-    //        // Convert Verifier settings
-    //        if (settingsGroup.Verifier != null)
-    //        {
-    //            result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
-    //        }
+        //        // Convert Verifier settings
+        //        if (settingsGroup.Verifier != null)
+        //        {
+        //            result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
+        //        }
 
-    //        return result;
-    //    }
+        //        return result;
+        //    }
 
         /// <summary>
         /// Start a timer to periodically update job status

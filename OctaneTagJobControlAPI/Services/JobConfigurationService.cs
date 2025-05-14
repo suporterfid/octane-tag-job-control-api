@@ -159,7 +159,7 @@ namespace OctaneTagJobControlAPI.Services
                             { "enableLock", "false" },
                             { "enablePermalock", "false" }
                         },
-                        ReaderSettings = new ReaderSettingsGroup
+                        ReaderSettingsGroup = new ReaderSettingsGroup
                         {
                             Detector = new ReaderSettings
                             {
