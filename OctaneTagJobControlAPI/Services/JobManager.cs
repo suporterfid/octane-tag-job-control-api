@@ -551,6 +551,28 @@ namespace OctaneTagJobControlAPI.Services
                 if (jobConfig.Parameters.TryGetValue("testDurationSeconds", out var testDurationStr) &&
                     int.TryParse(testDurationStr, out int testDuration))
                     enduranceConfig.TestDurationSeconds = testDuration;
+
+                // Add mapping for our new GPI/GPO parameters
+                if (jobConfig.Parameters.TryGetValue("enableGpiTrigger", out var gpiTriggerStr))
+                    enduranceConfig.EnableGpiTrigger = bool.TryParse(gpiTriggerStr, out bool gpiTrigger) ? gpiTrigger : false;
+
+                if (jobConfig.Parameters.TryGetValue("gpiPort", out var gpiPortStr) &&
+                    ushort.TryParse(gpiPortStr, out ushort gpiPort))
+                    enduranceConfig.GpiPort = gpiPort;
+
+                if (jobConfig.Parameters.TryGetValue("gpiTriggerState", out var gpiStateStr))
+                    enduranceConfig.GpiTriggerState = bool.TryParse(gpiStateStr, out bool gpiState) ? gpiState : true;
+
+                if (jobConfig.Parameters.TryGetValue("enableGpoOutput", out var gpoOutputStr))
+                    enduranceConfig.EnableGpoOutput = bool.TryParse(gpoOutputStr, out bool gpoOutput) ? gpoOutput : false;
+
+                if (jobConfig.Parameters.TryGetValue("gpoPort", out var gpoPortStr) &&
+                    ushort.TryParse(gpoPortStr, out ushort gpoPort))
+                    enduranceConfig.GpoPort = gpoPort;
+
+                if (jobConfig.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr) &&
+                    int.TryParse(timeoutStr, out int timeout))
+                    enduranceConfig.GpoVerificationTimeoutMs = timeout;
             }
 
             return config;

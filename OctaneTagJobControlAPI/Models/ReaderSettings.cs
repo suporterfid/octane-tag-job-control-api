@@ -1,5 +1,4 @@
-﻿using OctaneTagWritingTest;
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace OctaneTagJobControlAPI.Models
 {
@@ -120,14 +119,27 @@ namespace OctaneTagJobControlAPI.Models
         public string FilterMode { get; set; } = "OnlyFilter1";
 
         /// <summary>
+        /// Gets or sets additional parameters specific to this reader.
+        /// </summary>
+        public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
         /// Creates a deep copy of the reader settings.
         /// </summary>
         /// <returns>A new instance of ReaderSettings with the same values.</returns>
         public ReaderSettings Clone()
         {
-            return JsonSerializer.Deserialize<ReaderSettings>(
+            var clone = JsonSerializer.Deserialize<ReaderSettings>(
                 JsonSerializer.Serialize(this)
             );
+
+            // Ensure parameters dictionary is cloned properly
+            if (Parameters != null && clone != null)
+            {
+                clone.Parameters = new Dictionary<string, string>(Parameters);
+            }
+
+            return clone;
         }
 
         /// <summary>

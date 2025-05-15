@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
@@ -9,7 +9,6 @@ using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using Org.LLRP.LTK.LLRPV1.Impinj;
-using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Models;
 
 namespace OctaneTagJobControlAPI.Strategies
@@ -49,10 +48,14 @@ namespace OctaneTagJobControlAPI.Strategies
         private bool enableGpoOutput = false;
         private ushort gpoPort = 1;
         private int gpoVerificationTimeoutMs = 1000;
-
+        
         // GPI event tracking
         private ConcurrentDictionary<long, Stopwatch> gpiEventTimers = new();
         private ConcurrentDictionary<long, bool> gpiEventVerified = new();
+        private ConcurrentDictionary<long, ImpinjReader> gpiEventReaders = new();  // Which reader triggered the event
+        private ConcurrentDictionary<long, string> gpiEventReaderRoles = new();    // Reader role (detector, writer, verifier)
+        private ConcurrentDictionary<long, bool> gpiEventGpoEnabled = new();       // GPO enabled for this event
+        private ConcurrentDictionary<long, ushort> gpiEventGpoPorts = new();          // GPO port for this event
         private long lastGpiEventId = 0;
 
         public MultiReaderEnduranceStrategy(
@@ -82,33 +85,6 @@ namespace OctaneTagJobControlAPI.Strategies
                 // Extract configuration settings from parameters
                 ExtractConfigurationSettings();
 
-
-                // Extract lock/permalock configuration from settings if available
-                // Try to get the lock and permalock settings - this should be adapted to match how parameters are passed
-                try
-                {
-                    // In a real implementation, this would extract configuration from parameters
-                    // For now, we'll check if any writer settings has parameters for lock/permalock
-                    var writerSettings = GetSettingsForRole("writer");
-
-                    // Example of checking for lock/permalock in configuration parameters
-                    // This is a placeholder implementation that would need to be adjusted
-                    // based on how parameters are actually stored
-
-                    // In a real scenario, these would come from WriteStrategyConfiguration parameters
-                    enableLock = false; // Default to false
-                    enablePermalock = false; // Default to false
-
-                    Console.WriteLine($"Lock setting: {enableLock}, Permalock setting: {enablePermalock}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error accessing lock configuration: {ex.Message}");
-                    // Default to false for both if there's any error
-                    enableLock = false;
-                    enablePermalock = false;
-                }
-
                 // Configure readers.
                 try
                 {
@@ -129,12 +105,36 @@ namespace OctaneTagJobControlAPI.Strategies
                 writerReader.TagOpComplete += OnTagOpComplete;
                 verifierReader.TagsReported += OnTagsReportedVerifier;
                 verifierReader.TagOpComplete += OnTagOpComplete;
-
-                // Register GPI event handler if enabled
-                if (enableGpiTrigger)
+                
+                // Register GPI event handlers for each reader that has GPI enabled
+                if (settings.TryGetValue("verifier", out var verifierSettings) && 
+                    verifierSettings.Parameters != null &&
+                    verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vGpiStr) &&
+                    bool.TryParse(vGpiStr, out bool vGpiEnabled) && 
+                    vGpiEnabled)
                 {
                     verifierReader.GpiChanged += OnGpiChanged;
-                    Console.WriteLine($"GPI trigger enabled on port {gpiPort} with trigger state {gpiTriggerState}");
+                    Console.WriteLine($"GPI trigger enabled on verifier reader");
+                }
+                
+                if (settings.TryGetValue("detector", out var detectorSettings) && 
+                    detectorSettings.Parameters != null &&
+                    detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dGpiStr) &&
+                    bool.TryParse(dGpiStr, out bool dGpiEnabled) && 
+                    dGpiEnabled)
+                {
+                    detectorReader.GpiChanged += OnGpiChanged;
+                    Console.WriteLine($"GPI trigger enabled on detector reader");
+                }
+                
+                if (settings.TryGetValue("writer", out var writerSettings) && 
+                    writerSettings.Parameters != null &&
+                    writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wGpiStr) &&
+                    bool.TryParse(wGpiStr, out bool wGpiEnabled) && 
+                    wGpiEnabled)
+                {
+                    writerReader.GpiChanged += OnGpiChanged;
+                    Console.WriteLine($"GPI trigger enabled on writer reader");
                 }
 
                 // Start readers
@@ -148,6 +148,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 // Create CSV header if needed
                 if (!File.Exists(logFile))
                 {
+                    // Update header to include GPI/GPO status
                     LogToCsv("Timestamp,TID,Previous_EPC,Expected_EPC,Verified_EPC,WriteTime_ms,VerifyTime_ms,Result,LockStatus,LockTime_ms,CycleCount,RSSI,AntennaPort,GpiTriggered,VerificationTimeMs");
                 }
 
@@ -158,7 +159,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     Thread.Sleep(100);
                     status.RunTime = runTimer.Elapsed;
-
+                    
                     // Check for GPI events that timed out without tag detection
                     CheckGpiTimeouts();
                 }
@@ -179,47 +180,122 @@ namespace OctaneTagJobControlAPI.Strategies
             }
         }
 
+        // Extract configuration settings from reader-specific parameters
         private void ExtractConfigurationSettings()
         {
             try
             {
-                // Get the writer settings to extract parameters
-                var writerSettings = GetSettingsForRole("writer");
-
-                // Extract lock/permalock settings
-                if (settings.ContainsKey("writer") && settings["writer"] != null)
+                // Set defaults
+                enableLock = false;
+                enablePermalock = false;
+                enableGpiTrigger = false;
+                gpiPort = 1;
+                gpiTriggerState = true;
+                enableGpoOutput = false;
+                gpoPort = 1;
+                gpoVerificationTimeoutMs = 1000;
+                
+                // Extract lock/permalock settings from writer reader
+                if (settings.TryGetValue("writer", out var writerSettings) && writerSettings.Parameters != null)
                 {
-                    var parameters = settings["writer"].Parameters;
-                    if (parameters != null)
+                    // Extract lock settings
+                    if (writerSettings.Parameters.TryGetValue("enableLock", out var lockStr))
+                        enableLock = bool.TryParse(lockStr, out bool lockVal) ? lockVal : false;
+
+                    if (writerSettings.Parameters.TryGetValue("enablePermalock", out var permalockStr))
+                        enablePermalock = bool.TryParse(permalockStr, out bool permalock) ? permalock : false;
+                }
+                
+                // Extract GPI settings from verifier reader (primary location for GPI/GPO settings)
+                if (settings.TryGetValue("verifier", out var verifierSettings) && verifierSettings.Parameters != null)
+                {
+                    // GPI settings
+                    if (verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var gpiTriggerStr))
+                        enableGpiTrigger = bool.TryParse(gpiTriggerStr, out bool gpiTrigger) ? gpiTrigger : false;
+
+                    if (verifierSettings.Parameters.TryGetValue("gpiPort", out var gpiPortStr))
+                        gpiPort = ushort.TryParse(gpiPortStr, out ushort port) ? port : (ushort)1;
+
+                    if (verifierSettings.Parameters.TryGetValue("gpiTriggerState", out var gpiStateStr))
+                        gpiTriggerState = bool.TryParse(gpiStateStr, out bool state) ? state : true;
+
+                    // GPO settings
+                    if (verifierSettings.Parameters.TryGetValue("enableGpoOutput", out var gpoOutputStr))
+                        enableGpoOutput = bool.TryParse(gpoOutputStr, out bool gpoOutput) ? gpoOutput : false;
+
+                    if (verifierSettings.Parameters.TryGetValue("gpoPort", out var gpoPortStr))
+                        gpoPort = ushort.TryParse(gpoPortStr, out ushort gpoPortVal) ? gpoPortVal : (ushort)1;
+
+                    if (verifierSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
+                        gpoVerificationTimeoutMs = int.TryParse(timeoutStr, out int timeout) ? timeout : 1000;
+                }
+                
+                // Check if we should use detector reader parameters instead
+                // (Advanced feature: we might want different readers to handle different GPI events)
+                if (settings.TryGetValue("detector", out var detectorSettings) && detectorSettings.Parameters != null)
+                {
+                    // Only override if explicitly enabled on detector
+                    if (detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var detGpiTriggerStr) &&
+                        bool.TryParse(detGpiTriggerStr, out bool detGpiTrigger) && detGpiTrigger)
                     {
-                        // Lock/Permalock settings
-                        if (parameters.TryGetValue("enableLock", out var lockStr))
-                            enableLock = bool.TryParse(lockStr, out bool lockVal) ? lockVal : false;
-
-                        if (parameters.TryGetValue("enablePermalock", out var permalockStr))
-                            enablePermalock = bool.TryParse(permalockStr, out bool permalock) ? permalock : false;
-
-                        // GPI/GPO settings
-                        if (parameters.TryGetValue("enableGpiTrigger", out var gpiTriggerStr))
-                            enableGpiTrigger = bool.TryParse(gpiTriggerStr, out bool gpiTrigger) ? gpiTrigger : false;
-
-                        if (parameters.TryGetValue("gpiPort", out var gpiPortStr))
-                            gpiPort = int.TryParse(gpiPortStr, out int port) ? port : 1;
-
-                        if (parameters.TryGetValue("gpiTriggerState", out var gpiStateStr))
-                            gpiTriggerState = bool.TryParse(gpiStateStr, out bool state) ? state : true;
-
-                        if (parameters.TryGetValue("enableGpoOutput", out var gpoOutputStr))
-                            enableGpoOutput = bool.TryParse(gpoOutputStr, out bool gpoOutput) ? gpoOutput : false;
-
-                        if (parameters.TryGetValue("gpoPort", out var gpoPortStr))
-                            gpoPort = int.TryParse(gpoPortStr, out int gpoPortVal) ? gpoPortVal : 1;
-
-                        if (parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
-                            gpoVerificationTimeoutMs = int.TryParse(timeoutStr, out int timeout) ? timeout : 1000;
+                        // Override with detector settings
+                        enableGpiTrigger = true;
+                        
+                        if (detectorSettings.Parameters.TryGetValue("gpiPort", out var detGpiPortStr))
+                            gpiPort = ushort.TryParse(detGpiPortStr, out ushort detPort) ? detPort : gpiPort;
+                            
+                        if (detectorSettings.Parameters.TryGetValue("gpiTriggerState", out var detGpiStateStr))
+                            gpiTriggerState = bool.TryParse(detGpiStateStr, out bool detState) ? detState : gpiTriggerState;
+                    }
+                    
+                    // Only override GPO if explicitly enabled on detector
+                    if (detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var detGpoOutputStr) &&
+                        bool.TryParse(detGpoOutputStr, out bool detGpoOutput) && detGpoOutput)
+                    {
+                        // Override with detector settings
+                        enableGpoOutput = true;
+                        
+                        if (detectorSettings.Parameters.TryGetValue("gpoPort", out var detGpoPortStr))
+                            gpoPort = ushort.TryParse(detGpoPortStr, out ushort detGpoPort) ? detGpoPort : gpoPort;
+                            
+                        if (detectorSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var detTimeoutStr))
+                            gpoVerificationTimeoutMs = ushort.TryParse(detTimeoutStr, out ushort detTimeout) ? detTimeout : gpoVerificationTimeoutMs;
                     }
                 }
-
+                
+                // Also check global parameters from EnduranceTestConfiguration if available
+                // This would be used if parameters are set at the strategy level rather than reader-specific
+                if (_serviceProvider != null)
+                {
+                    // Try to get EnduranceTestConfiguration from service provider if available
+                    var configService = _serviceProvider.GetService(typeof(EnduranceTestConfiguration)) as EnduranceTestConfiguration;
+                    if (configService != null)
+                    {
+                        // Only override if the properties exist in the configuration
+                        // This assumes EnduranceTestConfiguration has been updated with these properties
+                        
+                        // For lock settings, strategy-level settings take precedence
+                        enableLock = configService.LockAfterWrite;
+                        enablePermalock = configService.PermalockAfterWrite;
+                        
+                        // For GPI/GPO, only override if not already set by reader-specific parameters
+                        if (configService.GetType().GetProperty("EnableGpiTrigger") != null)
+                        {
+                            var gpiTriggerProp = configService.GetType().GetProperty("EnableGpiTrigger");
+                            if (gpiTriggerProp != null && !enableGpiTrigger)
+                            {
+                                var value = gpiTriggerProp.GetValue(configService);
+                                if (value is bool gpiEnabled)
+                                    enableGpiTrigger = gpiEnabled;
+                            }
+                        }
+                        
+                        // Similar checks for other properties
+                        // (Note: This reflection-based approach is just a fallback; directly accessing properties
+                        // would be better once EnduranceTestConfiguration is updated)
+                    }
+                }
+                
                 Console.WriteLine($"Configuration: Lock={enableLock}, Permalock={enablePermalock}, " +
                                   $"GpiTrigger={enableGpiTrigger} (Port {gpiPort}, State {gpiTriggerState}), " +
                                   $"GpoOutput={enableGpoOutput} (Port {gpoPort}, Timeout {gpoVerificationTimeoutMs}ms)");
@@ -235,61 +311,265 @@ namespace OctaneTagJobControlAPI.Strategies
             }
         }
 
+        // Override ConfigureVerifierReader to enable GPI events if needed
         protected override Settings ConfigureVerifierReader()
         {
             Settings settings = base.ConfigureVerifierReader();
-
-            if (enableGpiTrigger)
+            
+            // Check if GPI is enabled specifically for the verifier reader
+            if (enableGpiTrigger && this.settings.TryGetValue("verifier", out var verifierSettings))
             {
                 try
                 {
+                    // Get the port from verifier-specific settings, if available
+                    ushort verifierGpiPort = gpiPort;
+                    if (verifierSettings.Parameters != null && 
+                        verifierSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        ushort.TryParse(portStr, out ushort port))
+                    {
+                        verifierGpiPort = port;
+                    }
+                    
                     // Enable the specified GPI port
-                    settings.Gpis.GetGpi(gpiPort).IsEnabled = true;
-
+                    settings.Gpis.GetGpi(verifierGpiPort).IsEnabled = true;
+                    
                     // Apply the settings to the reader
                     verifierReader.ApplySettings(settings);
-
-                    Console.WriteLine($"Configured GPI port {gpiPort} on verifier reader");
+                    
+                    Console.WriteLine($"Configured GPI port {verifierGpiPort} on verifier reader");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Error configuring GPI on verifier reader: {ex.Message}");
                 }
             }
-
+            
             return settings;
         }
 
-        // Handle GPI events from the verifier reader
+        // Add method to configure detector reader GPI if needed
+        protected override Settings ConfigureDetectorReader()
+        {
+            Settings settings = base.ConfigureDetectorReader();
+            
+            // Check if GPI is enabled specifically for the detector reader
+            if (this.settings.TryGetValue("detector", out var detectorSettings) &&
+                detectorSettings.Parameters != null &&
+                detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var gpiEnableStr) &&
+                bool.TryParse(gpiEnableStr, out bool gpiEnabled) &&
+                gpiEnabled)
+            {
+                try
+                {
+                    // Get port from detector-specific settings
+                    ushort detectorGpiPort = 1; // Default
+                    if (detectorSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        ushort.TryParse(portStr, out ushort port))
+                    {
+                        detectorGpiPort = port;
+                    }
+                    
+                    // Enable the specified GPI port
+                    settings.Gpis.GetGpi(detectorGpiPort).IsEnabled = true;
+                    
+                    // Apply the settings to the reader
+                    detectorReader.ApplySettings(settings);
+                    
+                    // If detector has GPI enabled, register GPI handler
+                    detectorReader.GpiChanged += OnGpiChanged;
+                    
+                    Console.WriteLine($"Configured GPI port {detectorGpiPort} on detector reader");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error configuring GPI on detector reader: {ex.Message}");
+                }
+            }
+            
+            return settings;
+        }
+
+        // Add method to configure writer reader GPI if needed
+        protected override Settings ConfigureWriterReader()
+        {
+            Settings settings = base.ConfigureWriterReader();
+            
+            // Check if GPI is enabled specifically for the writer reader
+            if (this.settings.TryGetValue("writer", out var writerSettings) &&
+                writerSettings.Parameters != null &&
+                writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var gpiEnableStr) &&
+                bool.TryParse(gpiEnableStr, out bool gpiEnabled) &&
+                gpiEnabled)
+            {
+                try
+                {
+                    // Get port from writer-specific settings
+                    ushort writerGpiPort = 1; // Default
+                    if (writerSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        ushort.TryParse(portStr, out ushort port))
+                    {
+                        writerGpiPort = port;
+                    }
+                    
+                    // Enable the specified GPI port
+                    settings.Gpis.GetGpi(writerGpiPort).IsEnabled = true;
+                    
+                    // Apply the settings to the reader
+                    writerReader.ApplySettings(settings);
+                    
+                    // If writer has GPI enabled, register GPI handler
+                    writerReader.GpiChanged += OnGpiChanged;
+                    
+                    Console.WriteLine($"Configured GPI port {writerGpiPort} on writer reader");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error configuring GPI on writer reader: {ex.Message}");
+                }
+            }
+            
+            return settings;
+        }
+
+        // Handle GPI events from any reader
         private void OnGpiChanged(ImpinjReader reader, GpiEvent e)
         {
-            // Only process if it's the configured port and state
-            if (e.PortNumber == gpiPort && e.State == gpiTriggerState)
+            // Determine which reader triggered the event
+            string readerRole = "unknown";
+            int configuredPort = gpiPort;
+            bool configuredState = gpiTriggerState;
+            
+            if (reader == verifierReader)
+            {
+                readerRole = "verifier";
+                
+                // Get verifier-specific settings
+                if (settings.TryGetValue("verifier", out var verifierSettings) && 
+                    verifierSettings.Parameters != null)
+                {
+                    if (verifierSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        ushort.TryParse(portStr, out ushort port))
+                    {
+                        configuredPort = port;
+                    }
+                    
+                    if (verifierSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
+                        bool.TryParse(stateStr, out bool state))
+                    {
+                        configuredState = state;
+                    }
+                }
+            }
+            else if (reader == detectorReader)
+            {
+                readerRole = "detector";
+                
+                // Get detector-specific settings
+                if (settings.TryGetValue("detector", out var detectorSettings) && 
+                    detectorSettings.Parameters != null)
+                {
+                    if (detectorSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        int.TryParse(portStr, out int port))
+                    {
+                        configuredPort = port;
+                    }
+                    
+                    if (detectorSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
+                        bool.TryParse(stateStr, out bool state))
+                    {
+                        configuredState = state;
+                    }
+                }
+            }
+            else if (reader == writerReader)
+            {
+                readerRole = "writer";
+                
+                // Get writer-specific settings
+                if (settings.TryGetValue("writer", out var writerSettings) && 
+                    writerSettings.Parameters != null)
+                {
+                    if (writerSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
+                        int.TryParse(portStr, out int port))
+                    {
+                        configuredPort = port;
+                    }
+                    
+                    if (writerSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
+                        bool.TryParse(stateStr, out bool state))
+                    {
+                        configuredState = state;
+                    }
+                }
+            }
+            
+            // Only process if it's the configured port and state for this reader
+            if (e.PortNumber == configuredPort && e.State == configuredState)
             {
                 long eventId = Interlocked.Increment(ref lastGpiEventId);
-                Console.WriteLine($"GPI event detected on port {e.PortNumber}, State: {e.State}, Event ID: {eventId}");
-
+                Console.WriteLine($"GPI event detected on {readerRole} reader, port {e.PortNumber}, State: {e.State}, Event ID: {eventId}");
+                
                 // Create timer for this GPI event
                 var timer = new Stopwatch();
                 timer.Start();
                 gpiEventTimers[eventId] = timer;
                 gpiEventVerified[eventId] = false;
-
-                // Log the GPI event
-                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,GPI_Triggered,None,0,0,0,{e.PortNumber},True,0");
-
+                
+                // Store which reader triggered the event (for GPO response)
+                gpiEventReaders[eventId] = reader;
+                gpiEventReaderRoles[eventId] = readerRole;
+                
+                // Log the GPI event with reader role info
+                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,GPI_Triggered_{readerRole},None,0,0,0,{e.PortNumber},True,0");
+                
+                // Get reader-specific GPO settings
+                bool readerGpoEnabled = enableGpoOutput;
+                ushort readerGpoPort = gpoPort;
+                
+                if (readerRole == "verifier" && settings.TryGetValue("verifier", out var vSettings) && 
+                    vSettings.Parameters != null)
+                {
+                    if (vSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
+                        readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
+                        
+                    if (vSettings.Parameters.TryGetValue("gpoPort", out var portStr))
+                        readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
+                }
+                else if (readerRole == "detector" && settings.TryGetValue("detector", out var dSettings) && 
+                    dSettings.Parameters != null)
+                {
+                    if (dSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
+                        readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
+                        
+                    if (dSettings.Parameters.TryGetValue("gpoPort", out var portStr))
+                        readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
+                }
+                else if (readerRole == "writer" && settings.TryGetValue("writer", out var wSettings) && 
+                    wSettings.Parameters != null)
+                {
+                    if (wSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
+                        readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
+                        
+                    if (wSettings.Parameters.TryGetValue("gpoPort", out var portStr))
+                        readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
+                }
+                
+                // Store GPO information with the event
+                gpiEventGpoEnabled[eventId] = readerGpoEnabled;
+                gpiEventGpoPorts[eventId] = readerGpoPort;
+                
                 // Optionally trigger GPO immediately (will be reset if no tag found)
-                if (enableGpoOutput)
+                if (readerGpoEnabled)
                 {
                     try
                     {
                         // Set the output
-                        reader.SetGpo(gpoPort, true);
-                        Console.WriteLine($"GPO {gpoPort} activated due to GPI event");
+                        reader.SetGpo(readerGpoPort, true);
+                        Console.WriteLine($"GPO {readerGpoPort} activated on {readerRole} reader due to GPI event");
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error setting GPO {gpoPort}: {ex.Message}");
+                        Console.WriteLine($"Error setting GPO {readerGpoPort} on {readerRole} reader: {ex.Message}");
                     }
                 }
             }
@@ -299,46 +579,68 @@ namespace OctaneTagJobControlAPI.Strategies
         private void CheckGpiTimeouts()
         {
             if (!enableGpiTrigger) return;
-
+            
             foreach (var entry in gpiEventTimers.ToArray())
             {
                 long eventId = entry.Key;
                 Stopwatch timer = entry.Value;
-
+                
                 // Skip events that have been verified
                 if (gpiEventVerified.TryGetValue(eventId, out bool verified) && verified)
                     continue;
-
-                // Check if timeout exceeded
-                if (timer.ElapsedMilliseconds > gpoVerificationTimeoutMs)
+                
+                // Get reader and role information for this event
+                gpiEventReaders.TryGetValue(eventId, out ImpinjReader reader);
+                gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
+                
+                // Get reader-specific timeout
+                int timeoutMs = gpoVerificationTimeoutMs;
+                
+                // Get the timeout value from the specific reader settings if available
+                if (!string.IsNullOrEmpty(readerRole) && settings.TryGetValue(readerRole, out var readerSettings) &&
+                    readerSettings.Parameters != null && 
+                    readerSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
                 {
-                    Console.WriteLine($"!!! GPI event {eventId} timed out after {timer.ElapsedMilliseconds}ms without tag detection !!!");
-
-                    // Log the error
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,Missing_Tag,None,0,0,0,{gpiPort},True,{timer.ElapsedMilliseconds}");
-
-                    // Trigger error GPO output if enabled
-                    if (enableGpoOutput)
+                    timeoutMs = ushort.TryParse(timeoutStr, out ushort timeout) ? timeout : timeoutMs;
+                }
+                
+                // Check if timeout exceeded
+                if (timer.ElapsedMilliseconds > timeoutMs)
+                {
+                    Console.WriteLine($"!!! GPI event {eventId} on {readerRole} reader timed out after {timer.ElapsedMilliseconds}ms without tag detection !!!");
+                    
+                    // Log the error with reader role
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,Missing_Tag_{readerRole},None,0,0,0,0,True,{timer.ElapsedMilliseconds}");
+                    
+                    // Trigger error GPO output if enabled and we have a valid reader
+                    if (gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled) && 
+                        gpoEnabled && 
+                        reader != null &&
+                        gpiEventGpoPorts.TryGetValue(eventId, out ushort gpoPort))
                     {
                         try
                         {
                             // Set the output to indicate error (toggle)
-                            verifierReader.SetGpo(gpoPort, false);
+                            reader.SetGpo(gpoPort, false);
                             Thread.Sleep(200);
-                            verifierReader.SetGpo(gpoPort, true);
+                            reader.SetGpo(gpoPort, true);
                             Thread.Sleep(200);
-                            verifierReader.SetGpo(gpoPort, false);
-                            Console.WriteLine($"GPO {gpoPort} error signal sent (toggled)");
+                            reader.SetGpo(gpoPort, false);
+                            Console.WriteLine($"GPO {gpoPort} error signal sent (toggled) on {readerRole} reader");
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"Error setting GPO {gpoPort}: {ex.Message}");
+                            Console.WriteLine($"Error setting GPO {gpoPort} on {readerRole} reader: {ex.Message}");
                         }
                     }
-
+                    
                     // Remove from tracking
                     gpiEventTimers.TryRemove(eventId, out _);
                     gpiEventVerified.TryRemove(eventId, out _);
+                    gpiEventReaders.TryRemove(eventId, out _);
+                    gpiEventReaderRoles.TryRemove(eventId, out _);
+                    gpiEventGpoEnabled.TryRemove(eventId, out _);
+                    gpiEventGpoPorts.TryRemove(eventId, out _);
                 }
             }
         }
@@ -432,19 +734,6 @@ namespace OctaneTagJobControlAPI.Strategies
                         1,
                         true,
                         3);
-
-                    //TagOpController.Instance.TriggerPartialWriteAndVerify(
-                    //    tag,
-                    //    expectedEpc,
-                    //    writerReader,
-                    //    cancellationToken,
-                    //    swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                    //    newAccessPassword,
-                    //    true,
-                    //    14,
-                    //    1,
-                    //    true,
-                    //    3);
                 }
                 else
                 {
@@ -497,55 +786,76 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (enableGpiTrigger && gpiEventTimers.Count > 0)
                 {
                     // Find the most recent unverified GPI event
-                    var unverifiedEvents = gpiEventTimers.Where(e =>
+                    var unverifiedEvents = gpiEventTimers.Where(e => 
                         !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
                         .OrderByDescending(e => e.Key)
                         .ToList();
-
+                    
                     if (unverifiedEvents.Any())
                     {
                         var recentEvent = unverifiedEvents.First();
                         long eventId = recentEvent.Key;
                         Stopwatch timer = recentEvent.Value;
-
+                        
+                        // Get which reader triggered the event
+                        gpiEventReaders.TryGetValue(eventId, out ImpinjReader eventReader);
+                        gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
+                        gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled);
+                        gpiEventGpoPorts.TryGetValue(eventId, out ushort eventGpoPort);
+                        
                         Console.WriteLine($"Tag detected for GPI event {eventId} after {timer.ElapsedMilliseconds}ms: TID={tidHex}, EPC={epcHex}");
-
+                        
                         // Mark this event as verified
                         gpiEventVerified[eventId] = true;
-
+                        
                         // Set GPO to success if enabled
-                        if (enableGpoOutput)
+                        if (gpoEnabled && eventReader != null)
                         {
                             try
                             {
                                 if (success)
                                 {
                                     // Success signal (steady on)
-                                    verifierReader.SetGpo(gpoPort, true);
-                                    Console.WriteLine($"GPO {gpoPort} success signal sent (ON)");
+                                    eventReader.SetGpo(eventGpoPort, true);
+                                    Console.WriteLine($"GPO {eventGpoPort} success signal sent (ON) on {readerRole} reader");
+                                    
+                                    // Schedule GPO reset after 1 second
+                                    new Timer(state => {
+                                        try {
+                                            if (eventReader != null) {
+                                                eventReader.SetGpo(eventGpoPort, false);
+                                                Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {readerRole} reader");
+                                            }
+                                        } 
+                                        catch (Exception) { /* Ignore timer errors */ }
+                                    }, null, 1000, Timeout.Infinite);
                                 }
                                 else
                                 {
                                     // Wrong EPC signal (double pulse)
-                                    verifierReader.SetGpo(gpoPort, false);
+                                    eventReader.SetGpo(eventGpoPort, false);
                                     Thread.Sleep(100);
-                                    verifierReader.SetGpo(gpoPort, true);
+                                    eventReader.SetGpo(eventGpoPort, true);
                                     Thread.Sleep(100);
-                                    verifierReader.SetGpo(gpoPort, false);
-                                    Console.WriteLine($"GPO {gpoPort} wrong EPC signal sent (double pulse)");
+                                    eventReader.SetGpo(eventGpoPort, false);
+                                    Console.WriteLine($"GPO {eventGpoPort} wrong EPC signal sent (double pulse) on {readerRole} reader");
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"Error setting GPO {gpoPort}: {ex.Message}");
+                                Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
                             }
                         }
-
+                        
                         // Log with GPI information
-                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{writeStatus},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds}");
-
+                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{writeStatus}_{readerRole},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds}");
+                        
                         // Remove from tracking
                         gpiEventTimers.TryRemove(eventId, out _);
+                        gpiEventReaders.TryRemove(eventId, out _);
+                        gpiEventReaderRoles.TryRemove(eventId, out _);
+                        gpiEventGpoEnabled.TryRemove(eventId, out _);
+                        gpiEventGpoPorts.TryRemove(eventId, out _);
                     }
                 }
 
@@ -676,78 +986,102 @@ namespace OctaneTagJobControlAPI.Strategies
                     bool isGpiTriggered = false;
                     long matchingEventId = 0;
                     long gpiVerificationTime = 0;
-
+                    ImpinjReader eventReader = null;
+                    string readerRole = "unknown";
+                    bool gpoEnabled = false;
+                    ushort eventGpoPort = 1;
+                    
                     if (enableGpiTrigger)
                     {
                         // Find if this tag verification corresponds to a recent GPI event
-                        var unverifiedEvents = gpiEventTimers.Where(e =>
+                        var unverifiedEvents = gpiEventTimers.Where(e => 
                             !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
                             .OrderByDescending(e => e.Key)
                             .ToList();
-
+                            
                         if (unverifiedEvents.Any())
                         {
                             var recentEvent = unverifiedEvents.First();
                             matchingEventId = recentEvent.Key;
                             gpiVerificationTime = recentEvent.Value.ElapsedMilliseconds;
-
+                            
+                            // Get reader information for this event
+                            gpiEventReaders.TryGetValue(matchingEventId, out eventReader);
+                            gpiEventReaderRoles.TryGetValue(matchingEventId, out readerRole);
+                            gpiEventGpoEnabled.TryGetValue(matchingEventId, out gpoEnabled);
+                            gpiEventGpoPorts.TryGetValue(matchingEventId, out eventGpoPort);
+                            
                             // Mark as GPI triggered and verified
                             isGpiTriggered = true;
                             gpiEventVerified[matchingEventId] = true;
-
-                            Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId}: TID={tidHex}, successful={success}");
-
+                            
+                            Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId} on {readerRole} reader: TID={tidHex}, successful={success}");
+                            
                             // Set GPO signal based on verification result if enabled
-                            if (enableGpoOutput)
+                            if (gpoEnabled && eventReader != null)
                             {
                                 try
                                 {
                                     if (success)
                                     {
                                         // Success signal (steady on for 1 second)
-                                        verifierReader.SetGpo(gpoPort, true);
-                                        Console.WriteLine($"GPO {gpoPort} set to ON (success) for GPI event {matchingEventId}");
-
+                                        eventReader.SetGpo(eventGpoPort, true);
+                                        Console.WriteLine($"GPO {eventGpoPort} set to ON (success) on {readerRole} reader for GPI event {matchingEventId}");
+                                        
                                         // Schedule GPO reset after 1 second
                                         new Timer(state => {
-                                            try
-                                            {
-                                                verifierReader.SetGpo(gpoPort, false);
-                                                Console.WriteLine($"GPO {gpoPort} reset after success signal");
-                                            }
+                                            try {
+                                                if (eventReader != null) {
+                                                    eventReader.SetGpo(eventGpoPort, false);
+                                                    Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {readerRole} reader");
+                                                }
+                                            } 
                                             catch (Exception) { /* Ignore timer errors */ }
                                         }, null, 1000, Timeout.Infinite);
                                     }
                                     else
                                     {
                                         // EPC mismatch signal (triple pulse)
-                                        verifierReader.SetGpo(gpoPort, true);
+                                        eventReader.SetGpo(eventGpoPort, true);
                                         Thread.Sleep(100);
-                                        verifierReader.SetGpo(gpoPort, false);
+                                        eventReader.SetGpo(eventGpoPort, false);
                                         Thread.Sleep(100);
-                                        verifierReader.SetGpo(gpoPort, true);
+                                        eventReader.SetGpo(eventGpoPort, true);
                                         Thread.Sleep(100);
-                                        verifierReader.SetGpo(gpoPort, false);
+                                        eventReader.SetGpo(eventGpoPort, false);
                                         Thread.Sleep(100);
-                                        verifierReader.SetGpo(gpoPort, true);
+                                        eventReader.SetGpo(eventGpoPort, true);
                                         Thread.Sleep(100);
-                                        verifierReader.SetGpo(gpoPort, false);
-                                        Console.WriteLine($"GPO {gpoPort} triple pulse (EPC mismatch) for GPI event {matchingEventId}");
+                                        eventReader.SetGpo(eventGpoPort, false);
+                                        Console.WriteLine($"GPO {eventGpoPort} triple pulse (EPC mismatch) on {readerRole} reader for GPI event {matchingEventId}");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"Error setting GPO {gpoPort}: {ex.Message}");
+                                    Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
                                 }
                             }
-
+                            
                             // Remove from tracking
                             gpiEventTimers.TryRemove(matchingEventId, out _);
+                            gpiEventReaders.TryRemove(matchingEventId, out _);
+                            gpiEventReaderRoles.TryRemove(matchingEventId, out _);
+                            gpiEventGpoEnabled.TryRemove(matchingEventId, out _);
+                            gpiEventGpoPorts.TryRemove(matchingEventId, out _);
                         }
+                    } 
+                    else 
+                    {
+                        try {
+                            verifierReader.SetGpo(gpoPort, false);
+                            Console.WriteLine($"GPO {gpoPort} reset after success signal");
+                        }
+                        catch (Exception) { /* Ignore timer errors */ }
                     }
-
-                    // Log tag read/write result, including GPI information if applicable
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},{isGpiTriggered},{gpiVerificationTime}");
+                    
+                    // Log tag read/write result, including GPI and reader information if applicable
+                    string readerDesc = isGpiTriggered ? $"{readerRole}_reader" : "";
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status}_{readerDesc},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},{isGpiTriggered},{gpiVerificationTime}");
                     TagOpController.Instance.RecordResult(tidHex, status, success);
 
                     Console.WriteLine($"OnTagOpComplete - Verification result for TID {tidHex} on reader {sender.Address}: {status}");
@@ -852,6 +1186,66 @@ namespace OctaneTagJobControlAPI.Strategies
         {
             lock (status)
             {
+                var metrics = new Dictionary<string, object>
+                {
+                    { "CycleCount", cycleCount.Count > 0 ? cycleCount.Values.Average() : 0 },
+                    { "MaxCycle", cycleCount.Count > 0 ? cycleCount.Values.Max() : 0 },
+                    { "AvgWriteTimeMs", swWriteTimers.Count > 0 ? swWriteTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
+                    { "AvgVerifyTimeMs", swVerifyTimers.Count > 0 ? swVerifyTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
+                    { "AvgLockTimeMs", swLockTimers.Count > 0 ? swLockTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
+                    { "LockedTags", lockedTags.Count },
+                    { "LockEnabled", enableLock },
+                    { "PermalockEnabled", enablePermalock },
+                    { "GpiEventsTotal", lastGpiEventId },
+                    { "GpiEventsVerified", gpiEventVerified.Count(kv => kv.Value) },
+                    { "GpiEventsMissingTag", lastGpiEventId - gpiEventVerified.Count(kv => kv.Value) },
+                    { "GpiEventsPending", gpiEventTimers.Count },
+                    { "ElapsedSeconds", runTimer.Elapsed.TotalSeconds }
+                };
+                
+                // Add reader-specific GPI/GPO settings to metrics
+                if (settings.TryGetValue("verifier", out var verifierSettings) && 
+                    verifierSettings.Parameters != null)
+                {
+                    string vGpiEnabled = verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vStr) ? vStr : "false";
+                    string vGpiPort = verifierSettings.Parameters.TryGetValue("gpiPort", out var vPortStr) ? vPortStr : "1";
+                    string vGpoEnabled = verifierSettings.Parameters.TryGetValue("enableGpoOutput", out var vGpoStr) ? vGpoStr : "false";
+                    string vGpoPort = verifierSettings.Parameters.TryGetValue("gpoPort", out var vGpoPortStr) ? vGpoPortStr : "1";
+                    
+                    metrics["VerifierGpiEnabled"] = vGpiEnabled;
+                    metrics["VerifierGpiPort"] = vGpiPort;
+                    metrics["VerifierGpoEnabled"] = vGpoEnabled;
+                    metrics["VerifierGpoPort"] = vGpoPort;
+                }
+                
+                if (settings.TryGetValue("detector", out var detectorSettings) && 
+                    detectorSettings.Parameters != null)
+                {
+                    string dGpiEnabled = detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dStr) ? dStr : "false";
+                    string dGpiPort = detectorSettings.Parameters.TryGetValue("gpiPort", out var dPortStr) ? dPortStr : "1";
+                    string dGpoEnabled = detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var dGpoStr) ? dGpoStr : "false";
+                    string dGpoPort = detectorSettings.Parameters.TryGetValue("gpoPort", out var dGpoPortStr) ? dGpoPortStr : "1";
+                    
+                    metrics["DetectorGpiEnabled"] = dGpiEnabled;
+                    metrics["DetectorGpiPort"] = dGpiPort;
+                    metrics["DetectorGpoEnabled"] = dGpoEnabled;
+                    metrics["DetectorGpoPort"] = dGpoPort;
+                }
+                
+                if (settings.TryGetValue("writer", out var writerSettings) && 
+                    writerSettings.Parameters != null)
+                {
+                    string wGpiEnabled = writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wStr) ? wStr : "false";
+                    string wGpiPort = writerSettings.Parameters.TryGetValue("gpiPort", out var wPortStr) ? wPortStr : "1";
+                    string wGpoEnabled = writerSettings.Parameters.TryGetValue("enableGpoOutput", out var wGpoStr) ? wGpoStr : "false";
+                    string wGpoPort = writerSettings.Parameters.TryGetValue("gpoPort", out var wGpoPortStr) ? wGpoPortStr : "1";
+                    
+                    metrics["WriterGpiEnabled"] = wGpiEnabled;
+                    metrics["WriterGpiPort"] = wGpiPort;
+                    metrics["WriterGpoEnabled"] = wGpoEnabled;
+                    metrics["WriterGpoPort"] = wGpoPort;
+                }
+
                 return new JobExecutionStatus
                 {
                     TotalTagsProcessed = status.TotalTagsProcessed,
@@ -860,27 +1254,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     ProgressPercentage = status.ProgressPercentage,
                     CurrentOperation = status.CurrentOperation,
                     RunTime = status.RunTime,
-                    Metrics = new Dictionary<string, object>
-                    {
-                        { "CycleCount", cycleCount.Count > 0 ? cycleCount.Values.Average() : 0 },
-                        { "MaxCycle", cycleCount.Count > 0 ? cycleCount.Values.Max() : 0 },
-                        { "AvgWriteTimeMs", swWriteTimers.Count > 0 ? swWriteTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
-                        { "AvgVerifyTimeMs", swVerifyTimers.Count > 0 ? swVerifyTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
-                        { "AvgLockTimeMs", swLockTimers.Count > 0 ? swLockTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
-                        { "LockedTags", lockedTags.Count },
-                        { "LockEnabled", enableLock },
-                        { "PermalockEnabled", enablePermalock },
-                        { "GpiEnabled", enableGpiTrigger },
-                        { "GpiPort", gpiPort },
-                        { "GpiTriggerState", gpiTriggerState },
-                        { "GpoEnabled", enableGpoOutput },
-                        { "GpoPort", gpoPort },
-                        { "GpiEventsTotal", lastGpiEventId },
-                        { "GpiEventsVerified", gpiEventVerified.Count(kv => kv.Value) },
-                        { "GpiEventsMissingTag", lastGpiEventId - gpiEventVerified.Count(kv => kv.Value) },
-                        { "GpiEventsPending", gpiEventTimers.Count },
-                        { "ElapsedSeconds", runTimer.Elapsed.TotalSeconds }
-                    }
+                    Metrics = metrics
                 };
             }
         }
@@ -899,31 +1273,109 @@ namespace OctaneTagJobControlAPI.Strategies
                 RequiresMultipleReaders = true
             };
         }
-
+        
         public override void Dispose()
         {
             // Turn off any GPO outputs that might still be on
-            if (enableGpoOutput && verifierReader != null)
+            try
             {
-                try
+                // Check each reader for GPO settings
+                if (settings.TryGetValue("verifier", out var verifierSettings) &&
+                    verifierSettings.Parameters != null &&
+                    verifierSettings.Parameters.TryGetValue("enableGpoOutput", out var vGpoStr) &&
+                    bool.TryParse(vGpoStr, out bool vGpoEnabled) &&
+                    vGpoEnabled &&
+                    verifierReader != null)
                 {
-                    verifierReader.SetGpo(gpoPort, false);
+                    // Get GPO port
+                    ushort vGpoPort = gpoPort;
+                    if (verifierSettings.Parameters.TryGetValue("gpoPort", out var vPortStr) &&
+                        ushort.TryParse(vPortStr, out ushort vPort))
+                    {
+                        vGpoPort = vPort;
+                    }
+                    
+                    // Turn off GPO
+                    try
+                    {
+                        verifierReader.SetGpo(vGpoPort, false);
+                        Console.WriteLine($"Turned off GPO {vGpoPort} on verifier reader during cleanup");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error turning off GPO on verifier reader: {ex.Message}");
+                    }
                 }
-                catch (Exception)
+                
+                // Check detector reader
+                if (settings.TryGetValue("detector", out var detectorSettings) &&
+                    detectorSettings.Parameters != null &&
+                    detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var dGpoStr) &&
+                    bool.TryParse(dGpoStr, out bool dGpoEnabled) &&
+                    dGpoEnabled &&
+                    detectorReader != null)
                 {
-                    // Ignore errors during cleanup
+                    // Get GPO port
+                    ushort dGpoPort = gpoPort;
+                    if (detectorSettings.Parameters.TryGetValue("gpoPort", out var dPortStr) &&
+                        ushort.TryParse(dPortStr, out ushort dPort))
+                    {
+                        dGpoPort = dPort;
+                    }
+                    
+                    // Turn off GPO
+                    try
+                    {
+                        detectorReader.SetGpo(dGpoPort, false);
+                        Console.WriteLine($"Turned off GPO {dGpoPort} on detector reader during cleanup");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error turning off GPO on detector reader: {ex.Message}");
+                    }
+                }
+                
+                // Check writer reader
+                if (settings.TryGetValue("writer", out var writerSettings) &&
+                    writerSettings.Parameters != null &&
+                    writerSettings.Parameters.TryGetValue("enableGpoOutput", out var wGpoStr) &&
+                    bool.TryParse(wGpoStr, out bool wGpoEnabled) &&
+                    wGpoEnabled &&
+                    writerReader != null)
+                {
+                    // Get GPO port
+                    ushort wGpoPort = gpoPort;
+                    if (writerSettings.Parameters.TryGetValue("gpoPort", out var wPortStr) &&
+                        ushort.TryParse(wPortStr, out ushort wPort))
+                    {
+                        wGpoPort = wPort;
+                    }
+                    
+                    // Turn off GPO
+                    try
+                    {
+                        writerReader.SetGpo(wGpoPort, false);
+                        Console.WriteLine($"Turned off GPO {wGpoPort} on writer reader during cleanup");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error turning off GPO on writer reader: {ex.Message}");
+                    }
                 }
             }
-
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during GPO cleanup: {ex.Message}");
+            }
+            
             // Dispose of any timers
             foreach (var timer in gpiEventTimers.Values)
             {
                 timer.Stop();
             }
-
+            
             // Call the base class dispose method
             base.Dispose();
         }
-
     }
 }
