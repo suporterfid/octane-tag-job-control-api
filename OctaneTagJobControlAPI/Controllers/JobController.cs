@@ -15,6 +15,9 @@ namespace OctaneTagJobControlAPI.Controllers
         private readonly JobManager _jobManager;
         private readonly JobConfigurationService _configService;
 
+        // Error message constants
+        private const string JOB_ALREADY_RUNNING_ERROR = "Another job is currently running. Only one job can be active at a time.";
+
         /// <summary>
         /// Initializes a new instance of the <see cref="JobController"/> class.
         /// </summary>
@@ -133,10 +136,22 @@ namespace OctaneTagJobControlAPI.Controllers
         [HttpPost]
         [ProducesResponseType(typeof(JobCreatedResponse), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> CreateJob([FromBody] CreateJobRequest request)
         {
             try
             {
+                // Check if any job is already running
+                if (_jobManager.IsAnyJobRunning())
+                {
+                    return Conflict(new ApiResponse<object>
+                    {
+                        Success = false,
+                        Message = JOB_ALREADY_RUNNING_ERROR,
+                        Data = new { ActiveJobId = _jobManager.GetActiveJobId() }
+                    });
+                }
+
                 if (string.IsNullOrEmpty(request.StrategyType))
                 {
                     return BadRequest(new ApiResponse<object>
@@ -209,10 +224,23 @@ namespace OctaneTagJobControlAPI.Controllers
         [ProducesResponseType(typeof(ApiResponse<JobStatus>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> StartJob(string jobId, [FromBody] StartJobRequest request)
         {
             try
             {
+                // Check if another job is already running (that's not this job)
+                string activeJobId = _jobManager.GetActiveJobId();
+                if (!string.IsNullOrEmpty(activeJobId) && activeJobId != jobId)
+                {
+                    return Conflict(new ApiResponse<object>
+                    {
+                        Success = false,
+                        Message = JOB_ALREADY_RUNNING_ERROR,
+                        Data = new { ActiveJobId = activeJobId }
+                    });
+                }
+
                 // Check if the job exists
                 var job = await _jobManager.GetJobStatusAsync(jobId);
                 if (job == null || job.JobId != jobId)
@@ -240,11 +268,24 @@ namespace OctaneTagJobControlAPI.Controllers
 
                 if (!success)
                 {
-                    return BadRequest(new ApiResponse<object>
+                    // If starting failed but it's not because of another running job
+                    if (_jobManager.IsAnyJobRunning() && _jobManager.GetActiveJobId() != jobId)
                     {
-                        Success = false,
-                        Message = $"Failed to start job with ID {jobId}"
-                    });
+                        return Conflict(new ApiResponse<object>
+                        {
+                            Success = false,
+                            Message = JOB_ALREADY_RUNNING_ERROR,
+                            Data = new { ActiveJobId = _jobManager.GetActiveJobId() }
+                        });
+                    }
+                    else
+                    {
+                        return BadRequest(new ApiResponse<object>
+                        {
+                            Success = false,
+                            Message = $"Failed to start job with ID {jobId}"
+                        });
+                    }
                 }
 
                 // Get the updated status
@@ -336,6 +377,45 @@ namespace OctaneTagJobControlAPI.Controllers
         }
 
         /// <summary>
+        /// Gets the currently active job, if any.
+        /// </summary>
+        /// <returns>The active job status if there is one; otherwise, a 404 response.</returns>
+        [HttpGet("active")]
+        [ProducesResponseType(typeof(ApiResponse<JobStatus>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> GetActiveJob()
+        {
+            string activeJobId = _jobManager.GetActiveJobId();
+
+            if (string.IsNullOrEmpty(activeJobId))
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = "No active job found"
+                });
+            }
+
+            var job = await _jobManager.GetJobStatusAsync(activeJobId);
+
+            if (job == null)
+            {
+                return NotFound(new ApiResponse<object>
+                {
+                    Success = false,
+                    Message = "Active job not found in database"
+                });
+            }
+
+            return Ok(new ApiResponse<JobStatus>
+            {
+                Success = true,
+                Message = "Active job found",
+                Data = job
+            });
+        }
+
+        /// <summary>
         /// Gets metrics for a specific job.
         /// </summary>
         /// <param name="jobId">The ID of the job.</param>
@@ -412,12 +492,12 @@ namespace OctaneTagJobControlAPI.Controllers
         [ProducesResponseType(typeof(ApiResponse<TagDataResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public IActionResult GetJobTags(
-    string jobId,
-    [FromQuery] int page = 1,
-    [FromQuery] int pageSize = 50,
-    [FromQuery] string sortBy = "timestamp",
-    [FromQuery] bool descending = true,
-    [FromQuery] string filter = null)
+                string jobId,
+                [FromQuery] int page = 1,
+                [FromQuery] int pageSize = 50,
+                [FromQuery] string sortBy = "timestamp",
+                [FromQuery] bool descending = true,
+                [FromQuery] string filter = null)
         {
             // Check if the job exists
             var job = _jobManager.GetJobStatusAsync(jobId).GetAwaiter().GetResult();

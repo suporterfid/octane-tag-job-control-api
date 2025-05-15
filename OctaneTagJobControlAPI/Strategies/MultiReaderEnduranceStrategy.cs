@@ -332,7 +332,23 @@ namespace OctaneTagJobControlAPI.Strategies
                     
                     // Enable the specified GPI port
                     settings.Gpis.GetGpi(verifierGpiPort).IsEnabled = true;
-                    
+                    settings.Gpis.GetGpi(verifierGpiPort).DebounceInMs = 500;
+
+                    // The settings retrieved from the reader will tell us many things,
+                    // including the number of GPOs and GPIs supported by the reader.
+                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
+                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    int numOfGPOs = settings.Gpos.Length;
+
+                    settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(1).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(2).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(2).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(3).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(3).GpoPulseDurationMsec = 500;
+
                     // Apply the settings to the reader
                     verifierReader.ApplySettings(settings);
                     
@@ -368,10 +384,32 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         detectorGpiPort = port;
                     }
-                    
+
                     // Enable the specified GPI port
                     settings.Gpis.GetGpi(detectorGpiPort).IsEnabled = true;
-                    
+                    settings.Gpis.GetGpi(detectorGpiPort).DebounceInMs = 500;
+
+                    // The settings retrieved from the reader will tell us many things,
+                    // including the number of GPOs and GPIs supported by the reader.
+                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
+                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    int numOfGPOs = settings.Gpos.Length;
+
+                    settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(1).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(2).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(2).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(3).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(3).GpoPulseDurationMsec = 500;
+
+                    // Only set GPO4 if the retrieved settings told us there were 4 GPOs
+                    // This setting simply sets GPO 4 to behave as a plain vanilla GPO.
+                    if (numOfGPOs == 4)
+                        settings.Gpos.GetGpo(4).Mode = GpoMode.Pulsed;
+                        settings.Gpos.GetGpo(4).GpoPulseDurationMsec = 500;
+
                     // Apply the settings to the reader
                     detectorReader.ApplySettings(settings);
                     
@@ -413,7 +451,23 @@ namespace OctaneTagJobControlAPI.Strategies
                     
                     // Enable the specified GPI port
                     settings.Gpis.GetGpi(writerGpiPort).IsEnabled = true;
-                    
+                    settings.Gpis.GetGpi(writerGpiPort).DebounceInMs = 500;
+
+                    // The settings retrieved from the reader will tell us many things,
+                    // including the number of GPOs and GPIs supported by the reader.
+                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
+                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    int numOfGPOs = settings.Gpos.Length;
+
+                    settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(1).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(2).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(2).GpoPulseDurationMsec = 500;
+
+                    settings.Gpos.GetGpo(3).Mode = GpoMode.Pulsed;
+                    settings.Gpos.GetGpo(3).GpoPulseDurationMsec = 500;
+
                     // Apply the settings to the reader
                     writerReader.ApplySettings(settings);
                     
@@ -621,11 +675,7 @@ namespace OctaneTagJobControlAPI.Strategies
                         try
                         {
                             // Set the output to indicate error (toggle)
-                            reader.SetGpo(gpoPort, false);
-                            Thread.Sleep(200);
                             reader.SetGpo(gpoPort, true);
-                            Thread.Sleep(200);
-                            reader.SetGpo(gpoPort, false);
                             Console.WriteLine($"GPO {gpoPort} error signal sent (toggled) on {readerRole} reader");
                         }
                         catch (Exception ex)
@@ -819,25 +869,14 @@ namespace OctaneTagJobControlAPI.Strategies
                                     eventReader.SetGpo(eventGpoPort, true);
                                     Console.WriteLine($"GPO {eventGpoPort} success signal sent (ON) on {readerRole} reader");
                                     
-                                    // Schedule GPO reset after 1 second
-                                    new Timer(state => {
-                                        try {
-                                            if (eventReader != null) {
-                                                eventReader.SetGpo(eventGpoPort, false);
-                                                Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {readerRole} reader");
-                                            }
-                                        } 
-                                        catch (Exception) { /* Ignore timer errors */ }
-                                    }, null, 1000, Timeout.Infinite);
+                                    
                                 }
                                 else
                                 {
                                     // Wrong EPC signal (double pulse)
-                                    eventReader.SetGpo(eventGpoPort, false);
-                                    Thread.Sleep(100);
                                     eventReader.SetGpo(eventGpoPort, true);
-                                    Thread.Sleep(100);
-                                    eventReader.SetGpo(eventGpoPort, false);
+                                    Thread.Sleep(500);
+                                    eventReader.SetGpo(eventGpoPort, true);
                                     Console.WriteLine($"GPO {eventGpoPort} wrong EPC signal sent (double pulse) on {readerRole} reader");
                                 }
                             }

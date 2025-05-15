@@ -1,5 +1,4 @@
-﻿// OctaneTagJobControlAPI/Services/JobManager.cs
-using OctaneTagJobControlAPI.Models;
+﻿using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Repositories;
 using OctaneTagWritingTest;
 using OctaneTagJobControlAPI.Strategies;
@@ -12,7 +11,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using OctaneTagJobControlAPI.Strategies;
 using OctaneTagJobControlAPI.Extensions;
 using OctaneTagJobControlAPI.Strategies.Base;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,6 +32,15 @@ namespace OctaneTagJobControlAPI.Services
         private readonly IConfigurationRepository _configRepository;
         private readonly IServiceProvider _serviceProvider;
         private StrategyFactory _strategyFactory;
+
+        // Add a locking object for synchronization
+        private readonly object _activeJobLock = new object();
+
+        // Track the currently active job ID
+        private string _activeJobId = null;
+
+        // Status message for job already running scenario
+        private const string JOB_ALREADY_RUNNING_MESSAGE = "Another job is currently running. Only one job can be active at a time.";
 
         public JobManager(
             ILogger<JobManager> logger,
@@ -84,10 +91,48 @@ namespace OctaneTagJobControlAPI.Services
         }
 
         /// <summary>
+        /// Checks if there is any job currently running
+        /// </summary>
+        /// <returns>True if there is an active job; otherwise, false</returns>
+        public bool IsAnyJobRunning()
+        {
+            lock (_activeJobLock)
+            {
+                return _activeJobId != null;
+            }
+        }
+
+        /// <summary>
+        /// Gets the ID of the active job, if any
+        /// </summary>
+        /// <returns>The ID of the currently active job, or null if no job is running</returns>
+        public string GetActiveJobId()
+        {
+            lock (_activeJobLock)
+            {
+                return _activeJobId;
+            }
+        }
+
+        /// <summary>
         /// Start a job with the given ID
         /// </summary>
+        /// <param name="jobId">The ID of the job to start</param>
+        /// <param name="timeoutSeconds">Timeout in seconds after which the job will be automatically canceled</param>
+        /// <returns>True if the job was started successfully; otherwise, false</returns>
         public async Task<bool> StartJobAsync(string jobId, int timeoutSeconds = 300)
         {
+            // Check if another job is already running
+            lock (_activeJobLock)
+            {
+                if (_activeJobId != null)
+                {
+                    _logger.LogWarning("Cannot start job {JobId}: Another job {ActiveJobId} is already running",
+                        jobId, _activeJobId);
+                    return false;
+                }
+            }
+
             // Get the job status and configuration
             var status = await _jobRepository.GetJobStatusAsync(jobId);
             if (status == null)
@@ -148,6 +193,12 @@ namespace OctaneTagJobControlAPI.Services
 
                 _jobStrategies[jobId] = strategy;
 
+                // Set as the active job (under lock)
+                lock (_activeJobLock)
+                {
+                    _activeJobId = jobId;
+                }
+
                 // Start the job in a background task
                 var task = Task.Run(async () =>
                 {
@@ -195,6 +246,17 @@ namespace OctaneTagJobControlAPI.Services
 
                         _logger.LogError(ex, "Error executing job {JobId}", jobId);
                     }
+                    finally
+                    {
+                        // Clear the active job when it's done (under lock)
+                        lock (_activeJobLock)
+                        {
+                            if (_activeJobId == jobId)
+                            {
+                                _activeJobId = null;
+                            }
+                        }
+                    }
                 }, cts.Token);
 
                 _jobTasks[jobId] = task;
@@ -212,6 +274,15 @@ namespace OctaneTagJobControlAPI.Services
                 status.ErrorMessage = ex.Message;
                 await _jobRepository.UpdateJobStatusAsync(jobId, status);
                 await _jobRepository.AddJobLogEntryAsync(jobId, $"Failed to start job: {ex.Message}");
+
+                // Clear the active job in case of error (under lock)
+                lock (_activeJobLock)
+                {
+                    if (_activeJobId == jobId)
+                    {
+                        _activeJobId = null;
+                    }
+                }
 
                 return false;
             }
@@ -240,6 +311,15 @@ namespace OctaneTagJobControlAPI.Services
 
                     await _jobRepository.UpdateJobStatusAsync(jobId, status);
                     await _jobRepository.AddJobLogEntryAsync(jobId, "Job was canceled by user");
+                }
+
+                // Clear the active job when it's stopped (under lock)
+                lock (_activeJobLock)
+                {
+                    if (_activeJobId == jobId)
+                    {
+                        _activeJobId = null;
+                    }
                 }
 
                 _logger.LogInformation("Job {JobId} canceled by user", jobId);
@@ -303,11 +383,17 @@ namespace OctaneTagJobControlAPI.Services
         /// </summary>
         public void CleanupJobs()
         {
+            // Track jobs that need to have their active status cleared
+            var jobsToDeactivate = new List<string>();
+
             foreach (var jobId in _jobTasks.Keys.ToList())
             {
                 // Check if the task has completed
                 if (_jobTasks.TryGetValue(jobId, out var task) && task.IsCompleted)
                 {
+                    // Add to the list of jobs to deactivate
+                    jobsToDeactivate.Add(jobId);
+
                     // Remove task and CTS
                     _jobTasks.TryRemove(jobId, out _);
 
@@ -320,6 +406,18 @@ namespace OctaneTagJobControlAPI.Services
                     {
                         // Clean up strategy resources if applicable
                         (strategy as IDisposable)?.Dispose();
+                    }
+                }
+            }
+
+            // Clear active job status for completed jobs (under lock)
+            if (jobsToDeactivate.Count > 0)
+            {
+                lock (_activeJobLock)
+                {
+                    if (_activeJobId != null && jobsToDeactivate.Contains(_activeJobId))
+                    {
+                        _activeJobId = null;
                     }
                 }
             }
@@ -389,9 +487,6 @@ namespace OctaneTagJobControlAPI.Services
 
         #region Private Methods
 
-        // Excerpt from JobManager.cs - CreateJobStrategyAsync method update
-        // The main changes needed are in the CreateJobStrategyAsync method of the JobManager class
-        // This method is responsible for creating strategy instances with the appropriate parameters
         private async Task<IJobStrategy> CreateJobStrategyAsync(JobConfiguration config, string jobId = null)
         {
             try
@@ -409,11 +504,10 @@ namespace OctaneTagJobControlAPI.Services
                 }
 
                 // Get the strategy factory from the service provider
-                if(_strategyFactory == null)
+                if (_strategyFactory == null)
                 {
                     _strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
                 }
-                // var strategyFactory = _serviceProvider.GetRequiredService<StrategyFactory>();
 
                 // Convert JobConfiguration to StrategyConfiguration
                 var strategyConfig = ConvertToStrategyConfiguration(config, strategyType);
@@ -577,35 +671,6 @@ namespace OctaneTagJobControlAPI.Services
 
             return config;
         }
-
-        /// <summary>
-        /// Convert our API ReaderSettings to the Dictionary format expected by the strategies
-        /// </summary>
-        //    private Dictionary<string, ReaderSettings> ConvertReaderSettings(
-        //ReaderSettingsGroup settingsGroup)
-        //    {
-        //        var result = new Dictionary<string, ReaderSettings>();
-
-        //        // Convert Detector settings
-        //        if (settingsGroup.Detector != null)
-        //        {
-        //            result["detector"] = settingsGroup.Detector.ToLegacySettings("detector");
-        //        }
-
-        //        // Convert Writer settings
-        //        if (settingsGroup.Writer != null)
-        //        {
-        //            result["writer"] = settingsGroup.Writer.ToLegacySettings("writer");
-        //        }
-
-        //        // Convert Verifier settings
-        //        if (settingsGroup.Verifier != null)
-        //        {
-        //            result["verifier"] = settingsGroup.Verifier.ToLegacySettings("verifier");
-        //        }
-
-        //        return result;
-        //    }
 
         /// <summary>
         /// Start a timer to periodically update job status

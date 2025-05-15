@@ -472,6 +472,45 @@ namespace OctaneTagJobControlAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Gets information about the active job in the system, if any.
+        /// </summary>
+        /// <returns>Information about the active job if one is running; otherwise, a status indicating no job is active.</returns>
+        [HttpGet("activejob")]
+        [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+        public async Task<IActionResult> GetActiveJobStatus([FromServices] JobManager jobManager)
+        {
+            var activeJobId = jobManager.GetActiveJobId();
+            bool isJobRunning = jobManager.IsAnyJobRunning();
+
+            var result = new Dictionary<string, object>
+    {
+        { "isJobRunning", isJobRunning },
+        { "activeJobId", activeJobId ?? string.Empty }
+    };
+
+            // If there's an active job, include its details
+            if (isJobRunning && !string.IsNullOrEmpty(activeJobId))
+            {
+                var jobStatus = await jobManager.GetJobStatusAsync(activeJobId);
+                if (jobStatus != null)
+                {
+                    result["activeJobName"] = jobStatus.JobName;
+                    result["activeJobState"] = jobStatus.State.ToString();
+                    result["activeJobStartTime"] = jobStatus.StartTime?.ToString("yyyy-MM-dd HH:mm:ss UTC");
+                    result["activeJobCurrentOperation"] = jobStatus.CurrentOperation;
+                    result["activeJobProgressPercentage"] = jobStatus.ProgressPercentage;
+                }
+            }
+
+            return Ok(new ApiResponse<object>
+            {
+                Success = true,
+                Message = isJobRunning ? "An active job is currently running" : "No job is currently running",
+                Data = result
+            });
+        }
+
         #region Helper Methods
 
         private DateTime GetBuildDate(Assembly assembly)
