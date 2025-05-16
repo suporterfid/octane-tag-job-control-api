@@ -174,7 +174,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 };
 
                 // Cache the tag data
-                _lastReadTags.AddOrUpdate(tidHex, tagData, (key, oldValue) => {
+                _lastReadTags.AddOrUpdate(tidHex, tagData, (key, oldValue) =>
+                {
                     oldValue.ReadCount++;
                     oldValue.Timestamp = DateTime.Now;
                     oldValue.RSSI = tag.PeakRssiInDbm;
@@ -209,7 +210,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     Console.WriteLine($"Processing pending write for TID {tidHex}: {epcHex} -> {newEpc}");
 
                     // Use TagOpController to handle the write operation
-                    var writeSuccess = TagOpController.Instance.TriggerWriteAndVerify(
+                    TagOpController.Instance.TriggerWriteAndVerify(
                         tag,
                         newEpc,
                         reader,
@@ -221,6 +222,8 @@ namespace OctaneTagJobControlAPI.Strategies
                         true, // Enable fast ID
                         3     // Number of retries
                     );
+
+                    var writeSuccess = TagOpController.Instance.HasResult(tidHex);
 
                     // If successful and lock is enabled, use TagOpController to handle locking
                     if (writeSuccess && _lockEnabled)

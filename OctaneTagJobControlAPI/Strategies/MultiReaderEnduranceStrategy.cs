@@ -838,7 +838,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     // Otherwise, just record the detection for distributed processing
                     else
                     {
-                        TagOpController.Instance.RecordTagSeen(tidHex, epcHex, expectedEpc, TagOpController.Instance.GetChipModel(tag));
+                        TagOpController.Instance.RecordTagSeen(tidHex, epcHex, expectedEpc, TagOpController.Instance.GetChipModelName(tag));
                     }
                 }
             }
@@ -900,7 +900,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     if (expectedEpc != null && expectedEpc.Equals(epcHex, StringComparison.OrdinalIgnoreCase))
                     {
-                        TagOpController.Instance.HandleVerifiedTag(tag, tidHex, expectedEpc, swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()), swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()), cycleCount, tag, TagOpController.Instance.GetChipModel(tag), logFile);
+                        TagOpController.Instance.HandleVerifiedTag(tag, tidHex, expectedEpc, swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()), swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()), cycleCount, tag, TagOpController.Instance.GetChipModelName(tag), logFile);
                         continue;
                     }
                 }

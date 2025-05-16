@@ -90,9 +90,20 @@ namespace OctaneTagWritingTest.Helpers
             public bool IsKilled { get; set; }
         }
 
-        /// <summary>
+    /// <summary>
     /// Determines the tag type based on its TID
     /// </summary>
+    public string GetChipModelName(Tag tag)
+    {
+        string chipModelName = "GenericIC";
+        if (tag.IsFastIdPresent)
+                chipModelName = tag.ModelDetails.ModelName.ToString();
+
+            return chipModelName;
+    }
+     /// <summary>
+     /// Determines the tag type based on its TID
+     /// </summary>
     public TagType GetChipModel(Tag tag)
     {
         string chipModel = "";
