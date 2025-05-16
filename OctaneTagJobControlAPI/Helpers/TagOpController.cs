@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace OctaneTagWritingTest.Helpers
 {
-    public sealed class TagOpController
+    public sealed partial  class TagOpController
     { // Dictionary: key = TID, value = expected EPC.
         private Dictionary<string, string> expectedEpcByTid = new Dictionary<string, string>();
         // Dictionaries for recording operation results.

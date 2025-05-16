@@ -14,11 +14,9 @@ using OctaneTagJobControlAPI.Models;
 namespace OctaneTagJobControlAPI.Strategies
 {
     /// <summary>
-    /// Dual-reader endurance strategy.
-    /// The first reader (writerReader) reads tags, generates or retrieves a new EPC for the read TID,
-    /// and sends a write operation. The second reader (verifierReader) monitors tag reads,
-    /// comparing each tag's EPC to its expected value; if a mismatch is found, it triggers a re-write
-    /// using the expected EPC.
+    /// Dual-reader endurance strategy with support for distributed reader roles.
+    /// This strategy can operate with any combination of detector, writer, and verifier readers,
+    /// allowing for deployment across multiple machines or instances.
     /// </summary>
     [StrategyDescription(
     "Performs endurance testing using multiple readers for detection, writing, and verification with optional locking",
@@ -48,16 +46,38 @@ namespace OctaneTagJobControlAPI.Strategies
         private bool enableGpoOutput = false;
         private ushort gpoPort = 1;
         private int gpoVerificationTimeoutMs = 1000;
-        
+
         // GPI event tracking
         private ConcurrentDictionary<long, Stopwatch> gpiEventTimers = new();
         private ConcurrentDictionary<long, bool> gpiEventVerified = new();
-        private ConcurrentDictionary<long, ImpinjReader> gpiEventReaders = new();  // Which reader triggered the event
-        private ConcurrentDictionary<long, string> gpiEventReaderRoles = new();    // Reader role (detector, writer, verifier)
-        private ConcurrentDictionary<long, bool> gpiEventGpoEnabled = new();       // GPO enabled for this event
-        private ConcurrentDictionary<long, ushort> gpiEventGpoPorts = new();          // GPO port for this event
+        private ConcurrentDictionary<long, ImpinjReader> gpiEventReaders = new();
+        private ConcurrentDictionary<long, string> gpiEventReaderRoles = new();
+        private ConcurrentDictionary<long, bool> gpiEventGpoEnabled = new();
+        private ConcurrentDictionary<long, ushort> gpiEventGpoPorts = new();
         private long lastGpiEventId = 0;
 
+        // Role availability flags
+        private bool hasDetectorRole = false;
+        private bool hasWriterRole = false;
+        private bool hasVerifierRole = false;
+
+        // Operational mode flags based on available readers
+        private bool operatingAsDetectorOnly = false;
+        private bool operatingAsWriterOnly = false;
+        private bool operatingAsVerifierOnly = false;
+        private bool operatingAsWriterVerifier = false;
+        private bool operatingAsDetectorWriter = false;
+
+        /// <summary>
+        /// Initializes a new instance of the MultiReaderEnduranceStrategy class
+        /// with support for distributed reader roles.
+        /// </summary>
+        /// <param name="detectorHostname">The hostname of the detector reader (can be null/empty if not used)</param>
+        /// <param name="writerHostname">The hostname of the writer reader (can be null/empty if not used)</param>
+        /// <param name="verifierHostname">The hostname of the verifier reader (can be null/empty if not used)</param>
+        /// <param name="logFile">The path to the log file</param>
+        /// <param name="readerSettings">Dictionary of reader settings</param>
+        /// <param name="serviceProvider">Optional service provider</param>
         public MultiReaderEnduranceStrategy(
             string detectorHostname,
             string writerHostname,
@@ -69,6 +89,32 @@ namespace OctaneTagJobControlAPI.Strategies
         {
             status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
+
+            // Determine which reader roles are available
+            hasDetectorRole = !string.IsNullOrWhiteSpace(detectorHostname) &&
+                           readerSettings.ContainsKey("detector") &&
+                           !string.IsNullOrWhiteSpace(readerSettings["detector"].Hostname);
+
+            hasWriterRole = !string.IsNullOrWhiteSpace(writerHostname) &&
+                         readerSettings.ContainsKey("writer") &&
+                         !string.IsNullOrWhiteSpace(readerSettings["writer"].Hostname);
+
+            hasVerifierRole = !string.IsNullOrWhiteSpace(verifierHostname) &&
+                           readerSettings.ContainsKey("verifier") &&
+                           !string.IsNullOrWhiteSpace(readerSettings["verifier"].Hostname);
+
+            // Determine operational mode based on available readers
+            operatingAsDetectorOnly = hasDetectorRole && !hasWriterRole && !hasVerifierRole;
+            operatingAsWriterOnly = !hasDetectorRole && hasWriterRole && !hasVerifierRole;
+            operatingAsVerifierOnly = !hasDetectorRole && !hasWriterRole && hasVerifierRole;
+            operatingAsWriterVerifier = !hasDetectorRole && hasWriterRole && hasVerifierRole;
+            operatingAsDetectorWriter = hasDetectorRole && hasWriterRole && !hasVerifierRole;
+
+            // Validate that at least one reader is available
+            if (!hasDetectorRole && !hasWriterRole && !hasVerifierRole)
+            {
+                throw new ArgumentException("At least one reader role (detector, writer, or verifier) must be configured");
+            }
         }
 
         public override void RunJob(CancellationToken cancellationToken = default)
@@ -79,18 +125,38 @@ namespace OctaneTagJobControlAPI.Strategies
                 status.CurrentOperation = "Starting";
                 runTimer.Start();
 
-                Console.WriteLine("=== Multiple Reader Endurance Test ===");
+                // Log which reader roles are active
+                string activeRoles = "";
+                if (hasDetectorRole) activeRoles += "Detector ";
+                if (hasWriterRole) activeRoles += "Writer ";
+                if (hasVerifierRole) activeRoles += "Verifier ";
+
+                Console.WriteLine($"=== Multiple Reader Endurance Test (Active Roles: {activeRoles.Trim()}) ===");
                 Console.WriteLine("Press 'q' to stop the test and return to menu.");
 
                 // Extract configuration settings from parameters
                 ExtractConfigurationSettings();
 
-                // Configure readers.
+                // Configure only the available readers
                 try
                 {
-                    ConfigureDetectorReader();
-                    ConfigureWriterReader();
-                    ConfigureVerifierReader();
+                    if (hasDetectorRole)
+                    {
+                        ConfigureDetectorReader();
+                        Console.WriteLine($"Configured detector reader at {detectorHostname}");
+                    }
+
+                    if (hasWriterRole)
+                    {
+                        ConfigureWriterReader();
+                        Console.WriteLine($"Configured writer reader at {writerHostname}");
+                    }
+
+                    if (hasVerifierRole)
+                    {
+                        ConfigureVerifierReader();
+                        Console.WriteLine($"Configured verifier reader at {verifierHostname}");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -99,48 +165,75 @@ namespace OctaneTagJobControlAPI.Strategies
                     throw;
                 }
 
-                // Register event handlers
-                detectorReader.TagsReported += OnTagsReportedDetector;
-                writerReader.TagsReported += OnTagsReportedWriter;
-                writerReader.TagOpComplete += OnTagOpComplete;
-                verifierReader.TagsReported += OnTagsReportedVerifier;
-                verifierReader.TagOpComplete += OnTagOpComplete;
-                
-                // Register GPI event handlers for each reader that has GPI enabled
-                if (settings.TryGetValue("verifier", out var verifierSettings) && 
-                    verifierSettings.Parameters != null &&
-                    verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vGpiStr) &&
-                    bool.TryParse(vGpiStr, out bool vGpiEnabled) && 
-                    vGpiEnabled)
+                // Register event handlers only for available readers
+                if (hasDetectorRole)
                 {
-                    verifierReader.GpiChanged += OnGpiChanged;
-                    Console.WriteLine($"GPI trigger enabled on verifier reader");
-                }
-                
-                if (settings.TryGetValue("detector", out var detectorSettings) && 
-                    detectorSettings.Parameters != null &&
-                    detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dGpiStr) &&
-                    bool.TryParse(dGpiStr, out bool dGpiEnabled) && 
-                    dGpiEnabled)
-                {
-                    detectorReader.GpiChanged += OnGpiChanged;
-                    Console.WriteLine($"GPI trigger enabled on detector reader");
-                }
-                
-                if (settings.TryGetValue("writer", out var writerSettings) && 
-                    writerSettings.Parameters != null &&
-                    writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wGpiStr) &&
-                    bool.TryParse(wGpiStr, out bool wGpiEnabled) && 
-                    wGpiEnabled)
-                {
-                    writerReader.GpiChanged += OnGpiChanged;
-                    Console.WriteLine($"GPI trigger enabled on writer reader");
+                    detectorReader.TagsReported += OnTagsReportedDetector;
+
+                    if (enableGpiTrigger &&
+                        settings.TryGetValue("detector", out var detectorSettings) &&
+                        detectorSettings.Parameters != null &&
+                        detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dGpiStr) &&
+                        bool.TryParse(dGpiStr, out bool dGpiEnabled) &&
+                        dGpiEnabled)
+                    {
+                        detectorReader.GpiChanged += OnGpiChanged;
+                        Console.WriteLine($"GPI trigger enabled on detector reader");
+                    }
                 }
 
-                // Start readers
-                detectorReader.Start();
-                writerReader.Start();
-                verifierReader.Start();
+                if (hasWriterRole)
+                {
+                    writerReader.TagsReported += OnTagsReportedWriter;
+                    writerReader.TagOpComplete += OnTagOpComplete;
+
+                    if (enableGpiTrigger &&
+                        settings.TryGetValue("writer", out var writerSettings) &&
+                        writerSettings.Parameters != null &&
+                        writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wGpiStr) &&
+                        bool.TryParse(wGpiStr, out bool wGpiEnabled) &&
+                        wGpiEnabled)
+                    {
+                        writerReader.GpiChanged += OnGpiChanged;
+                        Console.WriteLine($"GPI trigger enabled on writer reader");
+                    }
+                }
+
+                if (hasVerifierRole)
+                {
+                    verifierReader.TagsReported += OnTagsReportedVerifier;
+                    verifierReader.TagOpComplete += OnTagOpComplete;
+
+                    if (enableGpiTrigger &&
+                        settings.TryGetValue("verifier", out var verifierSettings) &&
+                        verifierSettings.Parameters != null &&
+                        verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vGpiStr) &&
+                        bool.TryParse(vGpiStr, out bool vGpiEnabled) &&
+                        vGpiEnabled)
+                    {
+                        verifierReader.GpiChanged += OnGpiChanged;
+                        Console.WriteLine($"GPI trigger enabled on verifier reader");
+                    }
+                }
+
+                // Start the available readers
+                if (hasDetectorRole)
+                {
+                    detectorReader.Start();
+                    Console.WriteLine("Started detector reader");
+                }
+
+                if (hasWriterRole)
+                {
+                    writerReader.Start();
+                    Console.WriteLine("Started writer reader");
+                }
+
+                if (hasVerifierRole)
+                {
+                    verifierReader.Start();
+                    Console.WriteLine("Started verifier reader");
+                }
 
                 // Update status
                 status.CurrentOperation = "Running";
@@ -148,8 +241,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 // Create CSV header if needed
                 if (!File.Exists(logFile))
                 {
-                    // Update header to include GPI/GPO status
-                    LogToCsv("Timestamp,TID,Previous_EPC,Expected_EPC,Verified_EPC,WriteTime_ms,VerifyTime_ms,Result,LockStatus,LockTime_ms,CycleCount,RSSI,AntennaPort,GpiTriggered,VerificationTimeMs");
+                    // Update header to include GPI/GPO status and reader role info
+                    LogToCsv("Timestamp,TID,Previous_EPC,Expected_EPC,Verified_EPC,WriteTime_ms,VerifyTime_ms,Result,LockStatus,LockTime_ms,CycleCount,RSSI,AntennaPort,GpiTriggered,VerificationTimeMs,ReaderRole");
                 }
 
                 // Initialize success count timer
@@ -159,9 +252,12 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     Thread.Sleep(100);
                     status.RunTime = runTimer.Elapsed;
-                    
+
                     // Check for GPI events that timed out without tag detection
-                    CheckGpiTimeouts();
+                    if (enableGpiTrigger)
+                    {
+                        CheckGpiTimeouts();
+                    }
                 }
 
                 status.CurrentOperation = "Stopping";
@@ -194,9 +290,9 @@ namespace OctaneTagJobControlAPI.Strategies
                 enableGpoOutput = false;
                 gpoPort = 1;
                 gpoVerificationTimeoutMs = 1000;
-                
+
                 // Extract lock/permalock settings from writer reader
-                if (settings.TryGetValue("writer", out var writerSettings) && writerSettings.Parameters != null)
+                if (hasWriterRole && settings.TryGetValue("writer", out var writerSettings) && writerSettings.Parameters != null)
                 {
                     // Extract lock settings
                     if (writerSettings.Parameters.TryGetValue("enableLock", out var lockStr))
@@ -205,9 +301,9 @@ namespace OctaneTagJobControlAPI.Strategies
                     if (writerSettings.Parameters.TryGetValue("enablePermalock", out var permalockStr))
                         enablePermalock = bool.TryParse(permalockStr, out bool permalock) ? permalock : false;
                 }
-                
+
                 // Extract GPI settings from verifier reader (primary location for GPI/GPO settings)
-                if (settings.TryGetValue("verifier", out var verifierSettings) && verifierSettings.Parameters != null)
+                if (hasVerifierRole && settings.TryGetValue("verifier", out var verifierSettings) && verifierSettings.Parameters != null)
                 {
                     // GPI settings
                     if (verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var gpiTriggerStr))
@@ -229,10 +325,9 @@ namespace OctaneTagJobControlAPI.Strategies
                     if (verifierSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
                         gpoVerificationTimeoutMs = int.TryParse(timeoutStr, out int timeout) ? timeout : 1000;
                 }
-                
-                // Check if we should use detector reader parameters instead
-                // (Advanced feature: we might want different readers to handle different GPI events)
-                if (settings.TryGetValue("detector", out var detectorSettings) && detectorSettings.Parameters != null)
+
+                // Also check detector reader parameters if available
+                if (hasDetectorRole && settings.TryGetValue("detector", out var detectorSettings) && detectorSettings.Parameters != null)
                 {
                     // Only override if explicitly enabled on detector
                     if (detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var detGpiTriggerStr) &&
@@ -240,44 +335,40 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         // Override with detector settings
                         enableGpiTrigger = true;
-                        
+
                         if (detectorSettings.Parameters.TryGetValue("gpiPort", out var detGpiPortStr))
                             gpiPort = ushort.TryParse(detGpiPortStr, out ushort detPort) ? detPort : gpiPort;
-                            
+
                         if (detectorSettings.Parameters.TryGetValue("gpiTriggerState", out var detGpiStateStr))
                             gpiTriggerState = bool.TryParse(detGpiStateStr, out bool detState) ? detState : gpiTriggerState;
                     }
-                    
+
                     // Only override GPO if explicitly enabled on detector
                     if (detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var detGpoOutputStr) &&
                         bool.TryParse(detGpoOutputStr, out bool detGpoOutput) && detGpoOutput)
                     {
                         // Override with detector settings
                         enableGpoOutput = true;
-                        
+
                         if (detectorSettings.Parameters.TryGetValue("gpoPort", out var detGpoPortStr))
                             gpoPort = ushort.TryParse(detGpoPortStr, out ushort detGpoPort) ? detGpoPort : gpoPort;
-                            
+
                         if (detectorSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var detTimeoutStr))
                             gpoVerificationTimeoutMs = ushort.TryParse(detTimeoutStr, out ushort detTimeout) ? detTimeout : gpoVerificationTimeoutMs;
                     }
                 }
-                
+
                 // Also check global parameters from EnduranceTestConfiguration if available
-                // This would be used if parameters are set at the strategy level rather than reader-specific
                 if (_serviceProvider != null)
                 {
                     // Try to get EnduranceTestConfiguration from service provider if available
                     var configService = _serviceProvider.GetService(typeof(EnduranceTestConfiguration)) as EnduranceTestConfiguration;
                     if (configService != null)
                     {
-                        // Only override if the properties exist in the configuration
-                        // This assumes EnduranceTestConfiguration has been updated with these properties
-                        
                         // For lock settings, strategy-level settings take precedence
                         enableLock = configService.LockAfterWrite;
                         enablePermalock = configService.PermalockAfterWrite;
-                        
+
                         // For GPI/GPO, only override if not already set by reader-specific parameters
                         if (configService.GetType().GetProperty("EnableGpiTrigger") != null)
                         {
@@ -289,14 +380,15 @@ namespace OctaneTagJobControlAPI.Strategies
                                     enableGpiTrigger = gpiEnabled;
                             }
                         }
-                        
-                        // Similar checks for other properties
-                        // (Note: This reflection-based approach is just a fallback; directly accessing properties
-                        // would be better once EnduranceTestConfiguration is updated)
                     }
                 }
-                
-                Console.WriteLine($"Configuration: Lock={enableLock}, Permalock={enablePermalock}, " +
+
+                string activeRoles = "";
+                if (hasDetectorRole) activeRoles += "Detector ";
+                if (hasWriterRole) activeRoles += "Writer ";
+                if (hasVerifierRole) activeRoles += "Verifier ";
+
+                Console.WriteLine($"Configuration (Active Roles: {activeRoles.Trim()}): Lock={enableLock}, Permalock={enablePermalock}, " +
                                   $"GpiTrigger={enableGpiTrigger} (Port {gpiPort}, State {gpiTriggerState}), " +
                                   $"GpoOutput={enableGpoOutput} (Port {gpoPort}, Timeout {gpoVerificationTimeoutMs}ms)");
             }
@@ -314,8 +406,13 @@ namespace OctaneTagJobControlAPI.Strategies
         // Override ConfigureVerifierReader to enable GPI events if needed
         protected override Settings ConfigureVerifierReader()
         {
+            if (!hasVerifierRole)
+            {
+                return null; // Skip if no verifier role
+            }
+
             Settings settings = base.ConfigureVerifierReader();
-            
+
             // Check if GPI is enabled specifically for the verifier reader
             if (enableGpiTrigger && this.settings.TryGetValue("verifier", out var verifierSettings))
             {
@@ -323,21 +420,18 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     // Get the port from verifier-specific settings, if available
                     ushort verifierGpiPort = gpiPort;
-                    if (verifierSettings.Parameters != null && 
+                    if (verifierSettings.Parameters != null &&
                         verifierSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
                         ushort.TryParse(portStr, out ushort port))
                     {
                         verifierGpiPort = port;
                     }
-                    
+
                     // Enable the specified GPI port
                     settings.Gpis.GetGpi(verifierGpiPort).IsEnabled = true;
                     settings.Gpis.GetGpi(verifierGpiPort).DebounceInMs = 500;
 
-                    // The settings retrieved from the reader will tell us many things,
-                    // including the number of GPOs and GPIs supported by the reader.
-                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
-                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    // Configure GPO ports
                     int numOfGPOs = settings.Gpos.Length;
 
                     settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
@@ -349,9 +443,16 @@ namespace OctaneTagJobControlAPI.Strategies
                     settings.Gpos.GetGpo(3).Mode = GpoMode.Pulsed;
                     settings.Gpos.GetGpo(3).GpoPulseDurationMsec = 500;
 
+                    // Only set GPO4 if the reader has 4 GPOs
+                    if (numOfGPOs == 4)
+                    {
+                        settings.Gpos.GetGpo(4).Mode = GpoMode.Pulsed;
+                        settings.Gpos.GetGpo(4).GpoPulseDurationMsec = 500;
+                    }
+
                     // Apply the settings to the reader
                     verifierReader.ApplySettings(settings);
-                    
+
                     Console.WriteLine($"Configured GPI port {verifierGpiPort} on verifier reader");
                 }
                 catch (Exception ex)
@@ -359,15 +460,20 @@ namespace OctaneTagJobControlAPI.Strategies
                     Console.WriteLine($"Error configuring GPI on verifier reader: {ex.Message}");
                 }
             }
-            
+
             return settings;
         }
 
         // Add method to configure detector reader GPI if needed
         protected override Settings ConfigureDetectorReader()
         {
+            if (!hasDetectorRole)
+            {
+                return null; // Skip if no detector role
+            }
+
             Settings settings = base.ConfigureDetectorReader();
-            
+
             // Check if GPI is enabled specifically for the detector reader
             if (this.settings.TryGetValue("detector", out var detectorSettings) &&
                 detectorSettings.Parameters != null &&
@@ -389,10 +495,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     settings.Gpis.GetGpi(detectorGpiPort).IsEnabled = true;
                     settings.Gpis.GetGpi(detectorGpiPort).DebounceInMs = 500;
 
-                    // The settings retrieved from the reader will tell us many things,
-                    // including the number of GPOs and GPIs supported by the reader.
-                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
-                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    // Configure GPO ports
                     int numOfGPOs = settings.Gpos.Length;
 
                     settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
@@ -404,18 +507,16 @@ namespace OctaneTagJobControlAPI.Strategies
                     settings.Gpos.GetGpo(3).Mode = GpoMode.Pulsed;
                     settings.Gpos.GetGpo(3).GpoPulseDurationMsec = 500;
 
-                    // Only set GPO4 if the retrieved settings told us there were 4 GPOs
-                    // This setting simply sets GPO 4 to behave as a plain vanilla GPO.
+                    // Only set GPO4 if the reader has 4 GPOs
                     if (numOfGPOs == 4)
+                    {
                         settings.Gpos.GetGpo(4).Mode = GpoMode.Pulsed;
                         settings.Gpos.GetGpo(4).GpoPulseDurationMsec = 500;
+                    }
 
                     // Apply the settings to the reader
                     detectorReader.ApplySettings(settings);
-                    
-                    // If detector has GPI enabled, register GPI handler
-                    detectorReader.GpiChanged += OnGpiChanged;
-                    
+
                     Console.WriteLine($"Configured GPI port {detectorGpiPort} on detector reader");
                 }
                 catch (Exception ex)
@@ -423,15 +524,20 @@ namespace OctaneTagJobControlAPI.Strategies
                     Console.WriteLine($"Error configuring GPI on detector reader: {ex.Message}");
                 }
             }
-            
+
             return settings;
         }
 
         // Add method to configure writer reader GPI if needed
         protected override Settings ConfigureWriterReader()
         {
+            if (!hasWriterRole)
+            {
+                return null; // Skip if no writer role
+            }
+
             Settings settings = base.ConfigureWriterReader();
-            
+
             // Check if GPI is enabled specifically for the writer reader
             if (this.settings.TryGetValue("writer", out var writerSettings) &&
                 writerSettings.Parameters != null &&
@@ -448,15 +554,12 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         writerGpiPort = port;
                     }
-                    
+
                     // Enable the specified GPI port
                     settings.Gpis.GetGpi(writerGpiPort).IsEnabled = true;
                     settings.Gpis.GetGpi(writerGpiPort).DebounceInMs = 500;
 
-                    // The settings retrieved from the reader will tell us many things,
-                    // including the number of GPOs and GPIs supported by the reader.
-                    // Note: For Speedway Revolution products there are 4 GPOs and 4 GPIs, 
-                    // whereas for R700 products there are just 3 GPOs and 2 GPIs. 
+                    // Configure GPO ports
                     int numOfGPOs = settings.Gpos.Length;
 
                     settings.Gpos.GetGpo(1).Mode = GpoMode.Pulsed;
@@ -470,10 +573,7 @@ namespace OctaneTagJobControlAPI.Strategies
 
                     // Apply the settings to the reader
                     writerReader.ApplySettings(settings);
-                    
-                    // If writer has GPI enabled, register GPI handler
-                    writerReader.GpiChanged += OnGpiChanged;
-                    
+
                     Console.WriteLine($"Configured GPI port {writerGpiPort} on writer reader");
                 }
                 catch (Exception ex)
@@ -481,7 +581,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     Console.WriteLine($"Error configuring GPI on writer reader: {ex.Message}");
                 }
             }
-            
+
             return settings;
         }
 
@@ -492,13 +592,13 @@ namespace OctaneTagJobControlAPI.Strategies
             string readerRole = "unknown";
             int configuredPort = gpiPort;
             bool configuredState = gpiTriggerState;
-            
+
             if (reader == verifierReader)
             {
                 readerRole = "verifier";
-                
+
                 // Get verifier-specific settings
-                if (settings.TryGetValue("verifier", out var verifierSettings) && 
+                if (settings.TryGetValue("verifier", out var verifierSettings) &&
                     verifierSettings.Parameters != null)
                 {
                     if (verifierSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
@@ -506,7 +606,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         configuredPort = port;
                     }
-                    
+
                     if (verifierSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
                         bool.TryParse(stateStr, out bool state))
                     {
@@ -517,9 +617,9 @@ namespace OctaneTagJobControlAPI.Strategies
             else if (reader == detectorReader)
             {
                 readerRole = "detector";
-                
+
                 // Get detector-specific settings
-                if (settings.TryGetValue("detector", out var detectorSettings) && 
+                if (settings.TryGetValue("detector", out var detectorSettings) &&
                     detectorSettings.Parameters != null)
                 {
                     if (detectorSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
@@ -527,7 +627,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         configuredPort = port;
                     }
-                    
+
                     if (detectorSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
                         bool.TryParse(stateStr, out bool state))
                     {
@@ -538,9 +638,9 @@ namespace OctaneTagJobControlAPI.Strategies
             else if (reader == writerReader)
             {
                 readerRole = "writer";
-                
+
                 // Get writer-specific settings
-                if (settings.TryGetValue("writer", out var writerSettings) && 
+                if (settings.TryGetValue("writer", out var writerSettings) &&
                     writerSettings.Parameters != null)
                 {
                     if (writerSettings.Parameters.TryGetValue("gpiPort", out var portStr) &&
@@ -548,7 +648,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         configuredPort = port;
                     }
-                    
+
                     if (writerSettings.Parameters.TryGetValue("gpiTriggerState", out var stateStr) &&
                         bool.TryParse(stateStr, out bool state))
                     {
@@ -556,62 +656,62 @@ namespace OctaneTagJobControlAPI.Strategies
                     }
                 }
             }
-            
+
             // Only process if it's the configured port and state for this reader
             if (e.PortNumber == configuredPort && e.State == configuredState)
             {
                 long eventId = Interlocked.Increment(ref lastGpiEventId);
                 Console.WriteLine($"GPI event detected on {readerRole} reader, port {e.PortNumber}, State: {e.State}, Event ID: {eventId}");
-                
+
                 // Create timer for this GPI event
                 var timer = new Stopwatch();
                 timer.Start();
                 gpiEventTimers[eventId] = timer;
                 gpiEventVerified[eventId] = false;
-                
+
                 // Store which reader triggered the event (for GPO response)
                 gpiEventReaders[eventId] = reader;
                 gpiEventReaderRoles[eventId] = readerRole;
-                
+
                 // Log the GPI event with reader role info
-                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,GPI_Triggered_{readerRole},None,0,0,0,{e.PortNumber},True,0");
-                
+                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,GPI_Triggered_{readerRole},None,0,0,0,{e.PortNumber},True,0,{readerRole}");
+
                 // Get reader-specific GPO settings
                 bool readerGpoEnabled = enableGpoOutput;
                 ushort readerGpoPort = gpoPort;
-                
-                if (readerRole == "verifier" && settings.TryGetValue("verifier", out var vSettings) && 
+
+                if (readerRole == "verifier" && settings.TryGetValue("verifier", out var vSettings) &&
                     vSettings.Parameters != null)
                 {
                     if (vSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
                         readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
-                        
+
                     if (vSettings.Parameters.TryGetValue("gpoPort", out var portStr))
                         readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
                 }
-                else if (readerRole == "detector" && settings.TryGetValue("detector", out var dSettings) && 
+                else if (readerRole == "detector" && settings.TryGetValue("detector", out var dSettings) &&
                     dSettings.Parameters != null)
                 {
                     if (dSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
                         readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
-                        
+
                     if (dSettings.Parameters.TryGetValue("gpoPort", out var portStr))
                         readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
                 }
-                else if (readerRole == "writer" && settings.TryGetValue("writer", out var wSettings) && 
+                else if (readerRole == "writer" && settings.TryGetValue("writer", out var wSettings) &&
                     wSettings.Parameters != null)
                 {
                     if (wSettings.Parameters.TryGetValue("enableGpoOutput", out var enableStr))
                         readerGpoEnabled = bool.TryParse(enableStr, out bool enable) ? enable : readerGpoEnabled;
-                        
+
                     if (wSettings.Parameters.TryGetValue("gpoPort", out var portStr))
                         readerGpoPort = ushort.TryParse(portStr, out ushort port) ? port : readerGpoPort;
                 }
-                
+
                 // Store GPO information with the event
                 gpiEventGpoEnabled[eventId] = readerGpoEnabled;
                 gpiEventGpoPorts[eventId] = readerGpoPort;
-                
+
                 // Optionally trigger GPO immediately (will be reset if no tag found)
                 if (readerGpoEnabled)
                 {
@@ -633,42 +733,42 @@ namespace OctaneTagJobControlAPI.Strategies
         private void CheckGpiTimeouts()
         {
             if (!enableGpiTrigger) return;
-            
+
             foreach (var entry in gpiEventTimers.ToArray())
             {
                 long eventId = entry.Key;
                 Stopwatch timer = entry.Value;
-                
+
                 // Skip events that have been verified
                 if (gpiEventVerified.TryGetValue(eventId, out bool verified) && verified)
                     continue;
-                
+
                 // Get reader and role information for this event
                 gpiEventReaders.TryGetValue(eventId, out ImpinjReader reader);
                 gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
-                
+
                 // Get reader-specific timeout
                 int timeoutMs = gpoVerificationTimeoutMs;
-                
+
                 // Get the timeout value from the specific reader settings if available
                 if (!string.IsNullOrEmpty(readerRole) && settings.TryGetValue(readerRole, out var readerSettings) &&
-                    readerSettings.Parameters != null && 
+                    readerSettings.Parameters != null &&
                     readerSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
                 {
                     timeoutMs = ushort.TryParse(timeoutStr, out ushort timeout) ? timeout : timeoutMs;
                 }
-                
+
                 // Check if timeout exceeded
                 if (timer.ElapsedMilliseconds > timeoutMs)
                 {
                     Console.WriteLine($"!!! GPI event {eventId} on {readerRole} reader timed out after {timer.ElapsedMilliseconds}ms without tag detection !!!");
-                    
+
                     // Log the error with reader role
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,Missing_Tag_{readerRole},None,0,0,0,0,True,{timer.ElapsedMilliseconds}");
-                    
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,Missing_Tag_{readerRole},None,0,0,0,0,True,{timer.ElapsedMilliseconds},{readerRole}");
+
                     // Trigger error GPO output if enabled and we have a valid reader
-                    if (gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled) && 
-                        gpoEnabled && 
+                    if (gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled) &&
+                        gpoEnabled &&
                         reader != null &&
                         gpiEventGpoPorts.TryGetValue(eventId, out ushort gpoPort))
                     {
@@ -683,7 +783,7 @@ namespace OctaneTagJobControlAPI.Strategies
                             Console.WriteLine($"Error setting GPO {gpoPort} on {readerRole} reader: {ex.Message}");
                         }
                     }
-                    
+
                     // Remove from tracking
                     gpiEventTimers.TryRemove(eventId, out _);
                     gpiEventVerified.TryRemove(eventId, out _);
@@ -697,7 +797,7 @@ namespace OctaneTagJobControlAPI.Strategies
 
         private void OnTagsReportedDetector(ImpinjReader sender, TagReport report)
         {
-            if (report == null || IsCancellationRequested())
+            if (!hasDetectorRole || report == null || IsCancellationRequested())
                 return;
 
             foreach (var tag in report.Tags)
@@ -707,9 +807,9 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (string.IsNullOrEmpty(tidHex) || TagOpController.Instance.IsTidProcessed(tidHex))
                     continue;
 
-                // Here, simply record and log the detection.
                 Console.WriteLine($"Detector: New tag detected. TID: {tidHex}, Current EPC: {epcHex}");
-                // Generate a new EPC (if one is not already recorded) using the detector logic.
+
+                // Generate a new EPC if one is not already recorded using the detector logic
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
@@ -717,30 +817,39 @@ namespace OctaneTagJobControlAPI.Strategies
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Detector: Assigned new EPC for TID {tidHex}: {expectedEpc}");
 
-                    // Trigger the write operation using the writer reader.
-                    TagOpController.Instance.TriggerWriteAndVerify(
-                        tag,
-                        expectedEpc,
-                        writerReader,
-                        cancellationToken,
-                        swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                        newAccessPassword,
-                        true,
-                        1,
-                        true,
-                        0);
+                    // Log the tag detection
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedNewTag,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,detector");
+
+                    // If we also have the writer role, trigger the write operation locally
+                    if (hasWriterRole)
+                    {
+                        TagOpController.Instance.TriggerWriteAndVerify(
+                            tag,
+                            expectedEpc,
+                            writerReader,
+                            cancellationToken,
+                            swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                            newAccessPassword,
+                            true,
+                            1,
+                            true,
+                            0);
+                    }
+                    // Otherwise, just record the detection for distributed processing
+                    else
+                    {
+                        TagOpController.Instance.RecordTagSeen(tidHex, epcHex, expectedEpc, TagOpController.Instance.GetChipModel(tag));
+                    }
                 }
-                // (Optionally, you might also update any UI or log this detection.)
             }
         }
 
         /// <summary>
-        /// Event handler for tag reports from the writer reader.
-        /// Captures the EPC and TID, generates or retrieves a new EPC for the TID, and sends the write operation.
+        /// Event handler for tag reports from the writer reader
         /// </summary>
         private void OnTagsReportedWriter(ImpinjReader sender, TagReport report)
         {
-            if (report == null || IsCancellationRequested())
+            if (!hasWriterRole || report == null || IsCancellationRequested())
                 return;
 
             foreach (var tag in report.Tags)
@@ -760,19 +869,21 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
 
-                // If no expected EPC exists, generate one using the writer logic.
+                // If no expected EPC exists, generate one using the writer logic
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
-                    Console.WriteLine($">>>>>>>>>>New target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
+                    Console.WriteLine($"Writer: New target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
                     expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
-                    Console.WriteLine($">>>>>>>>>>New tag found. TID: {tidHex}. Assigning new EPC: {epcHex} -> {expectedEpc}");
-                }
+                    Console.WriteLine($"Writer: New tag found. TID: {tidHex}. Assigning new EPC: {epcHex} -> {expectedEpc}");
 
+                    // Log the tag detection by the writer role
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedNewTagByWriter,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,writer");
+                }
 
                 if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
                 {
-                    // Trigger the write operation using the writer reader.
+                    // Trigger the write operation using the writer reader
                     TagOpController.Instance.TriggerWriteAndVerify(
                         tag,
                         expectedEpc,
@@ -782,7 +893,7 @@ namespace OctaneTagJobControlAPI.Strategies
                         newAccessPassword,
                         true,
                         1,
-                        true,
+                        hasVerifierRole ? false : true, // Only self-verify if no verifier role available
                         3);
                 }
                 else
@@ -790,7 +901,6 @@ namespace OctaneTagJobControlAPI.Strategies
                     if (expectedEpc != null && expectedEpc.Equals(epcHex, StringComparison.OrdinalIgnoreCase))
                     {
                         TagOpController.Instance.HandleVerifiedTag(tag, tidHex, expectedEpc, swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()), swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()), cycleCount, tag, TagOpController.Instance.GetChipModel(tag), logFile);
-                        //Console.WriteLine($"TID {tidHex} verified successfully on writer reader. Current EPC: {epcHex}");
                         continue;
                     }
                 }
@@ -798,14 +908,11 @@ namespace OctaneTagJobControlAPI.Strategies
         }
 
         /// <summary>
-        /// Event handler for tag reports from the verifier reader.
-        /// Compares the tag's EPC with the expected EPC; if they do not match, triggers a write operation retry using the expected EPC.
-        /// If they match and locking is enabled, may perform a lock or permalock operation.
-        /// Also handles GPI-triggered verification if enabled.
+        /// Event handler for tag reports from the verifier reader
         /// </summary>
         private void OnTagsReportedVerifier(ImpinjReader sender, TagReport report)
         {
-            if (report == null || IsCancellationRequested())
+            if (!hasVerifierRole || report == null || IsCancellationRequested())
                 return;
 
             foreach (var tag in report.Tags)
@@ -814,50 +921,52 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (string.IsNullOrEmpty(tidHex))
                     continue;
 
-                var epcHex = tag.Epc.ToHexString() ?? string.Empty;
+                var epcHex = tag.Epc?.ToHexString() ?? string.Empty;
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
 
-                // If no expected EPC exists, generate one using the writer logic.
+                // If no expected EPC exists (this can happen in distributed mode)
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
-                    Console.WriteLine($"OnTagsReportedVerifier>>>>>>>>>>TID not found. Considering re-write for target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
+                    // When operating as verifier only, we might see tags that detector/writer processed
+                    // We'll use a fallback approach to handle this case
                     expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
-                    Console.WriteLine($"OnTagsReportedVerifier>>>>>>>>>> TID: {tidHex}. Assigning EPC: {epcHex} -> {expectedEpc}");
+                    Console.WriteLine($"Verifier (fallback detection): TID {tidHex}. Current EPC: {epcHex}, Expected: {expectedEpc}");
+
+                    // Log this situation - seen by verifier first
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedByVerifierFirst,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
                 }
 
                 bool success = expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase);
                 var writeStatus = success ? "Success" : "Failure";
-                Console.WriteLine(".........................................");
-                Console.WriteLine($"OnTagsReportedVerifier - TID {tidHex} - current EPC: {epcHex} Expected EPC: {expectedEpc} Operation Status [{writeStatus}]");
-                Console.WriteLine(".........................................");
+                Console.WriteLine($"Verifier - TID {tidHex} - current EPC: {epcHex} Expected EPC: {expectedEpc} Operation Status [{writeStatus}]");
 
                 // Handle GPI verification if enabled
                 if (enableGpiTrigger && gpiEventTimers.Count > 0)
                 {
                     // Find the most recent unverified GPI event
-                    var unverifiedEvents = gpiEventTimers.Where(e => 
+                    var unverifiedEvents = gpiEventTimers.Where(e =>
                         !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
                         .OrderByDescending(e => e.Key)
                         .ToList();
-                    
+
                     if (unverifiedEvents.Any())
                     {
                         var recentEvent = unverifiedEvents.First();
                         long eventId = recentEvent.Key;
                         Stopwatch timer = recentEvent.Value;
-                        
+
                         // Get which reader triggered the event
                         gpiEventReaders.TryGetValue(eventId, out ImpinjReader eventReader);
                         gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
                         gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled);
                         gpiEventGpoPorts.TryGetValue(eventId, out ushort eventGpoPort);
-                        
+
                         Console.WriteLine($"Tag detected for GPI event {eventId} after {timer.ElapsedMilliseconds}ms: TID={tidHex}, EPC={epcHex}");
-                        
+
                         // Mark this event as verified
                         gpiEventVerified[eventId] = true;
-                        
+
                         // Set GPO to success if enabled
                         if (gpoEnabled && eventReader != null)
                         {
@@ -868,8 +977,6 @@ namespace OctaneTagJobControlAPI.Strategies
                                     // Success signal (steady on)
                                     eventReader.SetGpo(eventGpoPort, true);
                                     Console.WriteLine($"GPO {eventGpoPort} success signal sent (ON) on {readerRole} reader");
-                                    
-                                    
                                 }
                                 else
                                 {
@@ -885,10 +992,10 @@ namespace OctaneTagJobControlAPI.Strategies
                                 Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
                             }
                         }
-                        
+
                         // Log with GPI information
-                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{writeStatus}_{readerRole},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds}");
-                        
+                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{writeStatus}_{readerRole},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds},verifier");
+
                         // Remove from tracking
                         gpiEventTimers.TryRemove(eventId, out _);
                         gpiEventReaders.TryRemove(eventId, out _);
@@ -929,43 +1036,63 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         // If we're not locking or the tag is already locked, just record the success
                         TagOpController.Instance.RecordResult(tidHex, writeStatus, success);
-                        Console.WriteLine($"OnTagsReportedVerifier - TID {tidHex} verified successfully on verifier reader. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
+                        Console.WriteLine($"Verifier - TID {tidHex} verified successfully. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
                     }
                 }
                 else if (!string.IsNullOrEmpty(expectedEpc))
                 {
                     if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
                     {
-                        Console.WriteLine($"Verification mismatch for TID {tidHex}: expected {expectedEpc}, read {epcHex}. Retrying write operation using expected EPC.");
-                        // Retry writing using the expected EPC (without generating a new one) via the verifier reader.
-                        TagOpController.Instance.TriggerWriteAndVerify(
-                            tag,
-                            expectedEpc,
-                            sender,
-                            cancellationToken,
-                            swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                            newAccessPassword,
-                            true,
-                            1,
-                            false,
-                            3);
+                        Console.WriteLine($"Verification mismatch for TID {tidHex}: expected {expectedEpc}, read {epcHex}. Verification failed.");
+
+                        // If we also have writer role, retry the write directly
+                        if (hasWriterRole)
+                        {
+                            Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
+                            // Retry writing using the expected EPC via the writer reader
+                            TagOpController.Instance.TriggerWriteAndVerify(
+                                tag,
+                                expectedEpc,
+                                writerReader,
+                                cancellationToken,
+                                swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                                newAccessPassword,
+                                true,
+                                1,
+                                false,
+                                3);
+                        }
+                        else
+                        {
+                            // Just log the failure
+                            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},VerificationFailed,0,0,VerifyMismatch,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+                            TagOpController.Instance.RecordResult(tidHex, "VerificationFailed", false);
+                        }
                     }
                     else
                     {
-                        Console.WriteLine($"OnTagsReportedVerifier - TID {tidHex} verified successfully on verifier reader. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
+                        Console.WriteLine($"Verifier - TID {tidHex} verified successfully. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
                     }
                 }
             }
         }
 
         /// <summary>
-        /// Common event handler for tag operation completions from both readers.
-        /// Processes write, read, and lock operations, logs the result, and updates the cycle count.
+        /// Common event handler for tag operation completions from both readers
         /// </summary>
         private void OnTagOpComplete(ImpinjReader sender, TagOpReport report)
         {
             if (report == null || IsCancellationRequested())
                 return;
+
+            // Determine the reader role
+            string readerRole = "unknown";
+            if (sender == verifierReader)
+                readerRole = "verifier";
+            else if (sender == writerReader)
+                readerRole = "writer";
+            else if (sender == detectorReader)
+                readerRole = "detector";
 
             foreach (TagOpResult result in report)
             {
@@ -979,24 +1106,40 @@ namespace OctaneTagJobControlAPI.Strategies
                     var verifiedEpc = writeResult.Tag.Epc?.ToHexString() ?? "N/A";
                     bool success = !string.IsNullOrEmpty(expectedEpc) && expectedEpc.Equals(verifiedEpc, StringComparison.InvariantCultureIgnoreCase);
                     var writeStatus = success ? "Success" : "Failure";
+
                     if (success)
                     {
                         TagOpController.Instance.RecordResult(tidHex, writeStatus, success);
                     }
                     else if (writeResult.Result == WriteResultStatus.Success)
                     {
-                        Console.WriteLine($"OnTagOpComplete - Write operation succeeded for TID {tidHex} on reader {sender.Name}.");
-                        // After a successful write, trigger a verification read on the verifier reader.
-                        TagOpController.Instance.TriggerVerificationRead(
-                            result.Tag,
-                            sender,
-                            cancellationToken,
-                            swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                            newAccessPassword);
+                        Console.WriteLine($"Write operation succeeded for TID {tidHex} on {readerRole} reader.");
+
+                        // If we have a verifier role, trigger verification there
+                        if (hasVerifierRole)
+                        {
+                            TagOpController.Instance.TriggerVerificationRead(
+                                result.Tag,
+                                verifierReader,
+                                cancellationToken,
+                                swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                                newAccessPassword);
+                        }
+                        // Otherwise if we're a writer-only role with no verifier, do self-verification
+                        else if (operatingAsWriterOnly)
+                        {
+                            TagOpController.Instance.TriggerVerificationRead(
+                                result.Tag,
+                                writerReader,
+                                cancellationToken,
+                                swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                                newAccessPassword);
+                        }
                     }
                     else
                     {
-                        Console.WriteLine($"OnTagOpComplete - Write operation failed for TID {tidHex} on reader {sender.Name}.");
+                        Console.WriteLine($"Write operation failed for TID {tidHex} on {readerRole} reader.");
+                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},WriteFailed,{swWriteTimers[tidHex].ElapsedMilliseconds},0,Failure,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{result.Tag.PeakRssiInDbm},{result.Tag.AntennaPortNumber},False,0,{readerRole}");
                     }
                 }
                 else if (result is TagReadOpResult readResult)
@@ -1026,36 +1169,36 @@ namespace OctaneTagJobControlAPI.Strategies
                     long matchingEventId = 0;
                     long gpiVerificationTime = 0;
                     ImpinjReader eventReader = null;
-                    string readerRole = "unknown";
+                    string gpiReaderRole = "unknown";
                     bool gpoEnabled = false;
                     ushort eventGpoPort = 1;
-                    
+
                     if (enableGpiTrigger)
                     {
                         // Find if this tag verification corresponds to a recent GPI event
-                        var unverifiedEvents = gpiEventTimers.Where(e => 
+                        var unverifiedEvents = gpiEventTimers.Where(e =>
                             !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
                             .OrderByDescending(e => e.Key)
                             .ToList();
-                            
+
                         if (unverifiedEvents.Any())
                         {
                             var recentEvent = unverifiedEvents.First();
                             matchingEventId = recentEvent.Key;
                             gpiVerificationTime = recentEvent.Value.ElapsedMilliseconds;
-                            
+
                             // Get reader information for this event
                             gpiEventReaders.TryGetValue(matchingEventId, out eventReader);
-                            gpiEventReaderRoles.TryGetValue(matchingEventId, out readerRole);
+                            gpiEventReaderRoles.TryGetValue(matchingEventId, out gpiReaderRole);
                             gpiEventGpoEnabled.TryGetValue(matchingEventId, out gpoEnabled);
                             gpiEventGpoPorts.TryGetValue(matchingEventId, out eventGpoPort);
-                            
+
                             // Mark as GPI triggered and verified
                             isGpiTriggered = true;
                             gpiEventVerified[matchingEventId] = true;
-                            
-                            Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId} on {readerRole} reader: TID={tidHex}, successful={success}");
-                            
+
+                            Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId} on {gpiReaderRole} reader: TID={tidHex}, successful={success}");
+
                             // Set GPO signal based on verification result if enabled
                             if (gpoEnabled && eventReader != null)
                             {
@@ -1065,16 +1208,18 @@ namespace OctaneTagJobControlAPI.Strategies
                                     {
                                         // Success signal (steady on for 1 second)
                                         eventReader.SetGpo(eventGpoPort, true);
-                                        Console.WriteLine($"GPO {eventGpoPort} set to ON (success) on {readerRole} reader for GPI event {matchingEventId}");
-                                        
+                                        Console.WriteLine($"GPO {eventGpoPort} set to ON (success) on {gpiReaderRole} reader for GPI event {matchingEventId}");
+
                                         // Schedule GPO reset after 1 second
                                         new Timer(state => {
-                                            try {
-                                                if (eventReader != null) {
+                                            try
+                                            {
+                                                if (eventReader != null)
+                                                {
                                                     eventReader.SetGpo(eventGpoPort, false);
-                                                    Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {readerRole} reader");
+                                                    Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {gpiReaderRole} reader");
                                                 }
-                                            } 
+                                            }
                                             catch (Exception) { /* Ignore timer errors */ }
                                         }, null, 1000, Timeout.Infinite);
                                     }
@@ -1092,15 +1237,15 @@ namespace OctaneTagJobControlAPI.Strategies
                                         eventReader.SetGpo(eventGpoPort, true);
                                         Thread.Sleep(100);
                                         eventReader.SetGpo(eventGpoPort, false);
-                                        Console.WriteLine($"GPO {eventGpoPort} triple pulse (EPC mismatch) on {readerRole} reader for GPI event {matchingEventId}");
+                                        Console.WriteLine($"GPO {eventGpoPort} triple pulse (EPC mismatch) on {gpiReaderRole} reader for GPI event {matchingEventId}");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
+                                    Console.WriteLine($"Error setting GPO {eventGpoPort} on {gpiReaderRole} reader: {ex.Message}");
                                 }
                             }
-                            
+
                             // Remove from tracking
                             gpiEventTimers.TryRemove(matchingEventId, out _);
                             gpiEventReaders.TryRemove(matchingEventId, out _);
@@ -1108,45 +1253,47 @@ namespace OctaneTagJobControlAPI.Strategies
                             gpiEventGpoEnabled.TryRemove(matchingEventId, out _);
                             gpiEventGpoPorts.TryRemove(matchingEventId, out _);
                         }
-                    } 
-                    else 
-                    {
-                        try {
-                            verifierReader.SetGpo(gpoPort, false);
-                            Console.WriteLine($"GPO {gpoPort} reset after success signal");
-                        }
-                        catch (Exception) { /* Ignore timer errors */ }
                     }
-                    
+
                     // Log tag read/write result, including GPI and reader information if applicable
-                    string readerDesc = isGpiTriggered ? $"{readerRole}_reader" : "";
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status}_{readerDesc},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},{isGpiTriggered},{gpiVerificationTime}");
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},{isGpiTriggered},{gpiVerificationTime},{readerRole}");
                     TagOpController.Instance.RecordResult(tidHex, status, success);
 
-                    Console.WriteLine($"OnTagOpComplete - Verification result for TID {tidHex} on reader {sender.Address}: {status}");
+                    Console.WriteLine($"Verification result for TID {tidHex} on {readerRole} reader: {status}");
 
                     cycleCount.AddOrUpdate(tidHex, 1, (key, oldValue) => oldValue + 1);
 
                     if (!success)
                     {
-                        try
+                        // If we have writer role in the same instance, try to rewrite
+                        if (hasWriterRole)
                         {
-                            TagOpController.Instance.TriggerWriteAndVerify(
-                            readResult.Tag,
-                            expectedEpc,
-                            sender,
-                            cancellationToken,
-                            swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                            newAccessPassword,
-                            true,
-                            1,
-                            true,
-                            3);
+                            try
+                            {
+                                Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
+                                TagOpController.Instance.TriggerWriteAndVerify(
+                                    readResult.Tag,
+                                    expectedEpc,
+                                    writerReader,
+                                    cancellationToken,
+                                    swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                                    newAccessPassword,
+                                    true,
+                                    1,
+                                    true,
+                                    3);
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log exception but continue processing
+                                Console.WriteLine($"Error triggering write after verification failure: {ex.Message}");
+                            }
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            // Log exception but continue processing
-                            Console.WriteLine($"Error triggering write after verification failure: {ex.Message}");
+                            // Log the failure and wait for writer instance to handle it
+                            Console.WriteLine($"Verification failed - waiting for writer instance to handle it");
+                            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},VerificationFailed,{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},NeedsRetry,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},False,0,{readerRole}");
                         }
                     }
                 }
@@ -1160,7 +1307,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     string lockStatus = enablePermalock ? "Permalocked" : "Locked";
                     string lockOpStatus = success ? "Success" : "Failure";
 
-                    Console.WriteLine($"OnTagOpComplete - {lockStatus} operation for TID {tidHex} on reader {sender.Address}: {lockOpStatus} in {lockTimer.ElapsedMilliseconds}ms");
+                    Console.WriteLine($"{lockStatus} operation for TID {tidHex} on {readerRole} reader: {lockOpStatus} in {lockTimer.ElapsedMilliseconds}ms");
 
                     // If lock failed but EPC is still correct, we've still completed the main operation
                     var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
@@ -1170,14 +1317,13 @@ namespace OctaneTagJobControlAPI.Strategies
                                       expectedEpc.Equals(currentEpc, StringComparison.InvariantCultureIgnoreCase);
 
                     // Overall success is based on the EPC being correct, even if lock fails
-                    // This approach prioritizes getting the EPC right, with locking as a "nice to have"
                     if (epcCorrect)
                     {
                         TagOpController.Instance.RecordResult(tidHex, "Success", true);
                     }
 
                     // Log the lock operation
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{currentEpc},{expectedEpc},{currentEpc},{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},Success,{(success ? lockStatus : lockStatus + "Failed")},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{lockResult.Tag.PeakRssiInDbm},{lockResult.Tag.AntennaPortNumber},False,0");
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{currentEpc},{expectedEpc},{currentEpc},{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},Success,{(success ? lockStatus : lockStatus + "Failed")},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{lockResult.Tag.PeakRssiInDbm},{lockResult.Tag.AntennaPortNumber},False,0,{readerRole}");
                 }
             }
         }
@@ -1192,6 +1338,11 @@ namespace OctaneTagJobControlAPI.Strategies
                 int gpiEventsTotal = (int)lastGpiEventId;
                 int gpiEventsVerified = gpiEventVerified.Count(kv => kv.Value);
                 int gpiEventsPending = gpiEventTimers.Count;
+
+                string activeRoles = "";
+                if (hasDetectorRole) activeRoles += "Detector ";
+                if (hasWriterRole) activeRoles += "Writer ";
+                if (hasVerifierRole) activeRoles += "Verifier ";
 
                 lock (status)
                 {
@@ -1210,9 +1361,10 @@ namespace OctaneTagJobControlAPI.Strategies
                     status.Metrics["GpiEventsVerified"] = gpiEventsVerified;
                     status.Metrics["GpiEventsMissingTag"] = gpiEventsTotal - gpiEventsVerified;
                     status.Metrics["GpiEventsPending"] = gpiEventsPending;
+                    status.Metrics["ActiveRoles"] = activeRoles.Trim();
                 }
 
-                Console.WriteLine($"Total Read [{totalReadCount}] Success count: [{successCount}] Locked/Permalocked: [{lockedCount}] GPI Events: {gpiEventsTotal} (Verified: {gpiEventsVerified}, Missing: {gpiEventsTotal - gpiEventsVerified}, Pending: {gpiEventsPending})");
+                Console.WriteLine($"[{activeRoles.Trim()}] Total Read [{totalReadCount}] Success count: [{successCount}] Locked/Permalocked: [{lockedCount}] GPI Events: {gpiEventsTotal} (Verified: {gpiEventsVerified}, Missing: {gpiEventsTotal - gpiEventsVerified}, Pending: {gpiEventsPending})");
             }
             catch (Exception ex)
             {
@@ -1221,10 +1373,63 @@ namespace OctaneTagJobControlAPI.Strategies
             }
         }
 
+        /// <summary>
+        /// Overrides the base class CleanupReaders method to handle the case where not all readers are available
+        /// </summary>
+        protected override void CleanupReaders()
+        {
+            try
+            {
+                if (hasDetectorRole && detectorReader != null)
+                {
+                    detectorReader.Stop();
+                    detectorReader.Disconnect();
+                    Console.WriteLine("Disconnected detector reader");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during detector reader cleanup: {ex.Message}");
+            }
+
+            try
+            {
+                if (hasWriterRole && writerReader != null)
+                {
+                    writerReader.Stop();
+                    writerReader.Disconnect();
+                    Console.WriteLine("Disconnected writer reader");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during writer reader cleanup: {ex.Message}");
+            }
+
+            try
+            {
+                if (hasVerifierRole && verifierReader != null)
+                {
+                    verifierReader.Stop();
+                    verifierReader.Disconnect();
+                    Console.WriteLine("Disconnected verifier reader");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during verifier reader cleanup: {ex.Message}");
+            }
+        }
+
         public override JobExecutionStatus GetStatus()
         {
             lock (status)
             {
+                string activeRoles = "";
+                if (hasDetectorRole) activeRoles += "Detector ";
+                if (hasWriterRole) activeRoles += "Writer ";
+                if (hasVerifierRole) activeRoles += "Verifier ";
+
                 var metrics = new Dictionary<string, object>
                 {
                     { "CycleCount", cycleCount.Count > 0 ? cycleCount.Values.Average() : 0 },
@@ -1239,46 +1444,50 @@ namespace OctaneTagJobControlAPI.Strategies
                     { "GpiEventsVerified", gpiEventVerified.Count(kv => kv.Value) },
                     { "GpiEventsMissingTag", lastGpiEventId - gpiEventVerified.Count(kv => kv.Value) },
                     { "GpiEventsPending", gpiEventTimers.Count },
-                    { "ElapsedSeconds", runTimer.Elapsed.TotalSeconds }
+                    { "ElapsedSeconds", runTimer.Elapsed.TotalSeconds },
+                    { "ActiveRoles", activeRoles.Trim() },
+                    { "HasDetectorRole", hasDetectorRole },
+                    { "HasWriterRole", hasWriterRole },
+                    { "HasVerifierRole", hasVerifierRole }
                 };
-                
+
                 // Add reader-specific GPI/GPO settings to metrics
-                if (settings.TryGetValue("verifier", out var verifierSettings) && 
+                if (hasVerifierRole && settings.TryGetValue("verifier", out var verifierSettings) &&
                     verifierSettings.Parameters != null)
                 {
                     string vGpiEnabled = verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vStr) ? vStr : "false";
                     string vGpiPort = verifierSettings.Parameters.TryGetValue("gpiPort", out var vPortStr) ? vPortStr : "1";
                     string vGpoEnabled = verifierSettings.Parameters.TryGetValue("enableGpoOutput", out var vGpoStr) ? vGpoStr : "false";
                     string vGpoPort = verifierSettings.Parameters.TryGetValue("gpoPort", out var vGpoPortStr) ? vGpoPortStr : "1";
-                    
+
                     metrics["VerifierGpiEnabled"] = vGpiEnabled;
                     metrics["VerifierGpiPort"] = vGpiPort;
                     metrics["VerifierGpoEnabled"] = vGpoEnabled;
                     metrics["VerifierGpoPort"] = vGpoPort;
                 }
-                
-                if (settings.TryGetValue("detector", out var detectorSettings) && 
+
+                if (hasDetectorRole && settings.TryGetValue("detector", out var detectorSettings) &&
                     detectorSettings.Parameters != null)
                 {
                     string dGpiEnabled = detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dStr) ? dStr : "false";
                     string dGpiPort = detectorSettings.Parameters.TryGetValue("gpiPort", out var dPortStr) ? dPortStr : "1";
                     string dGpoEnabled = detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var dGpoStr) ? dGpoStr : "false";
                     string dGpoPort = detectorSettings.Parameters.TryGetValue("gpoPort", out var dGpoPortStr) ? dGpoPortStr : "1";
-                    
+
                     metrics["DetectorGpiEnabled"] = dGpiEnabled;
                     metrics["DetectorGpiPort"] = dGpiPort;
                     metrics["DetectorGpoEnabled"] = dGpoEnabled;
                     metrics["DetectorGpoPort"] = dGpoPort;
                 }
-                
-                if (settings.TryGetValue("writer", out var writerSettings) && 
+
+                if (hasWriterRole && settings.TryGetValue("writer", out var writerSettings) &&
                     writerSettings.Parameters != null)
                 {
                     string wGpiEnabled = writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wStr) ? wStr : "false";
                     string wGpiPort = writerSettings.Parameters.TryGetValue("gpiPort", out var wPortStr) ? wPortStr : "1";
                     string wGpoEnabled = writerSettings.Parameters.TryGetValue("enableGpoOutput", out var wGpoStr) ? wGpoStr : "false";
                     string wGpoPort = writerSettings.Parameters.TryGetValue("gpoPort", out var wGpoPortStr) ? wGpoPortStr : "1";
-                    
+
                     metrics["WriterGpiEnabled"] = wGpiEnabled;
                     metrics["WriterGpiPort"] = wGpiPort;
                     metrics["WriterGpoEnabled"] = wGpoEnabled;
@@ -1303,7 +1512,7 @@ namespace OctaneTagJobControlAPI.Strategies
             return new StrategyMetadata
             {
                 Name = "MultiReaderEnduranceStrategy",
-                Description = "Performs endurance testing using multiple readers for detection, writing, and verification with optional locking and GPI trigger support",
+                Description = "Performs endurance testing using multiple readers for detection, writing, and verification with support for distributed reader roles",
                 Category = "Advanced Testing",
                 ConfigurationType = typeof(EnduranceTestConfiguration),
                 Capabilities = StrategyCapability.Reading | StrategyCapability.Writing |
@@ -1312,14 +1521,15 @@ namespace OctaneTagJobControlAPI.Strategies
                 RequiresMultipleReaders = true
             };
         }
-        
+
         public override void Dispose()
         {
             // Turn off any GPO outputs that might still be on
             try
             {
                 // Check each reader for GPO settings
-                if (settings.TryGetValue("verifier", out var verifierSettings) &&
+                if (hasVerifierRole &&
+                    settings.TryGetValue("verifier", out var verifierSettings) &&
                     verifierSettings.Parameters != null &&
                     verifierSettings.Parameters.TryGetValue("enableGpoOutput", out var vGpoStr) &&
                     bool.TryParse(vGpoStr, out bool vGpoEnabled) &&
@@ -1333,7 +1543,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         vGpoPort = vPort;
                     }
-                    
+
                     // Turn off GPO
                     try
                     {
@@ -1345,9 +1555,10 @@ namespace OctaneTagJobControlAPI.Strategies
                         Console.WriteLine($"Error turning off GPO on verifier reader: {ex.Message}");
                     }
                 }
-                
+
                 // Check detector reader
-                if (settings.TryGetValue("detector", out var detectorSettings) &&
+                if (hasDetectorRole &&
+                    settings.TryGetValue("detector", out var detectorSettings) &&
                     detectorSettings.Parameters != null &&
                     detectorSettings.Parameters.TryGetValue("enableGpoOutput", out var dGpoStr) &&
                     bool.TryParse(dGpoStr, out bool dGpoEnabled) &&
@@ -1361,7 +1572,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         dGpoPort = dPort;
                     }
-                    
+
                     // Turn off GPO
                     try
                     {
@@ -1373,9 +1584,10 @@ namespace OctaneTagJobControlAPI.Strategies
                         Console.WriteLine($"Error turning off GPO on detector reader: {ex.Message}");
                     }
                 }
-                
+
                 // Check writer reader
-                if (settings.TryGetValue("writer", out var writerSettings) &&
+                if (hasWriterRole &&
+                    settings.TryGetValue("writer", out var writerSettings) &&
                     writerSettings.Parameters != null &&
                     writerSettings.Parameters.TryGetValue("enableGpoOutput", out var wGpoStr) &&
                     bool.TryParse(wGpoStr, out bool wGpoEnabled) &&
@@ -1389,7 +1601,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         wGpoPort = wPort;
                     }
-                    
+
                     // Turn off GPO
                     try
                     {
@@ -1406,13 +1618,13 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 Console.WriteLine($"Error during GPO cleanup: {ex.Message}");
             }
-            
+
             // Dispose of any timers
             foreach (var timer in gpiEventTimers.Values)
             {
                 timer.Stop();
             }
-            
+
             // Call the base class dispose method
             base.Dispose();
         }
