@@ -146,7 +146,180 @@ Non-invasive monitoring strategy that reads and logs tag information without mod
 Handles batch processing of tag serialization operations. Supports configurable batch sizes and serialization patterns.
 
 ### CheckBoxStrategy
-Single-reader strategy for tag verification and encoding. Reads tags during a configurable period, confirms tag count, and writes new EPCs based on selected encoding method.
+Single-reader strategy for tag verification and encoding. Reads tags during a configurable period, confirms tag count, and writes new EPCs based on selected encoding method. The strategy is controlled by GPI events and supports multiple EPC encoding methods.
+
+#### Features
+- GPI-triggered operation flow (Port 1)
+- Multiple EPC encoding methods:
+  - BasicWithTidSuffix: Combines header + SKU + TID suffix
+  - SGTIN-96: GS1 SGTIN-96 format
+  - CustomFormat: Reserved for future custom encoding
+- Automatic tag verification after writing
+- Detailed logging of tag operations
+- GPO status indication
+- Configurable read/write timeouts
+
+#### Configuration Options
+
+The strategy supports the following configuration parameters:
+- `epcHeader`: EPC header value (e.g., "E7")
+- `sku`: SKU or GS1 company prefix (12 digits for BasicWithTidSuffix, 13+ for SGTIN-96)
+- `encodingMethod`: EPC encoding method ("BasicWithTidSuffix", "SGTIN96", or "CustomFormat")
+- `partitionValue`: SGTIN-96 partition value (0-6, defaults to 6)
+- `itemReference`: SGTIN-96 item reference value
+- GPI/GPO settings for operation control and status indication
+
+#### Example Configurations
+
+1. **Basic Configuration with TID Suffix**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "BasicCheckBoxTest",
+    "strategyType": "CheckBoxStrategy",
+    "readerSettings": {
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 30,
+        "parameters": {
+          "enableGpiTrigger": "true",
+          "gpiPort": "1"
+        }
+      }
+    },
+    "parameters": {
+      "epcHeader": "E7",
+      "sku": "012345678901",
+      "encodingMethod": "BasicWithTidSuffix"
+    }
+  }'
+```
+
+Expected response:
+```json
+{
+  "jobId": "job123",
+  "status": "Created",
+  "metrics": {
+    "encodingMethod": "BasicWithTidSuffix",
+    "collectedTags": 0,
+    "verifiedTags": 0,
+    "sku": "012345678901",
+    "epcHeader": "E7"
+  }
+}
+```
+
+2. **SGTIN-96 Configuration with Verification**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Sgtin96CheckBoxTest",
+    "strategyType": "CheckBoxStrategy",
+    "readerSettings": {
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 30,
+        "parameters": {
+          "enableGpiTrigger": "true",
+          "gpiPort": "1",
+          "enableGpoOutput": "true",
+          "gpoPort": "1"
+        }
+      }
+    },
+    "parameters": {
+      "sku": "0123456789012",
+      "encodingMethod": "SGTIN96",
+      "partitionValue": "6",
+      "itemReference": "0"
+    }
+  }'
+```
+
+Expected response:
+```json
+{
+  "jobId": "job124",
+  "status": "Created",
+  "metrics": {
+    "encodingMethod": "SGTIN96",
+    "collectedTags": 0,
+    "verifiedTags": 0,
+    "sku": "0123456789012",
+    "partitionValue": 6
+  }
+}
+```
+
+#### Operation Flow
+
+1. When GPI Port 1 goes HIGH:
+   - Tag collection begins for a configurable period (default 10 seconds)
+   - User confirms collected tag count
+   - Write operations begin with selected encoding method
+   - Verification phase starts automatically after writing
+   - Results are logged with original and new EPCs
+
+2. When GPI Port 1 goes LOW:
+   - Current cycle completes
+   - Tag collections are cleared
+   - System prepares for next cycle
+
+#### Monitoring Status
+
+```bash
+curl -X GET "http://localhost:5000/api/job/{jobId}"
+```
+
+Example response:
+```json
+{
+  "status": "Running",
+  "metrics": {
+    "totalTagsProcessed": 10,
+    "successCount": 8,
+    "failureCount": 2,
+    "progressPercentage": 80.0,
+    "currentOperation": "Verifying Tags",
+    "encodingMethod": "SGTIN96",
+    "collectedTags": 10,
+    "verifiedTags": 8,
+    "elapsedSeconds": 15.5,
+    "sku": "0123456789012",
+    "epcHeader": "E7"
+  }
+}
+```
+
+#### Tag Operation Results
+
+```bash
+curl -X GET "http://localhost:5000/api/job/{jobId}/tags"
+```
+
+Example response:
+```json
+{
+  "tags": [
+    {
+      "tid": "E280116060000000000002A2",
+      "originalEpc": "E280116060000000000002A2",
+      "expectedEpc": "E70123456789012A2",
+      "verifiedEpc": "E70123456789012A2",
+      "encodingMethod": "BasicWithTidSuffix",
+      "result": "Success",
+      "timestamp": "2024-01-20T15:30:45Z"
+    }
+  ],
+  "totalCount": 1,
+  "pageSize": 50,
+  "currentPage": 1
+}
+```
+
 
 ### MultiReaderEnduranceStrategy
 Multi-reader strategy for endurance testing that can utilize up to three readers (detector, writer, and verifier). Uses separate readers for reading, writing and verifying operations, supporting continuous testing scenarios. Features:
