@@ -6,6 +6,7 @@ using OctaneTagJobControlAPI.Strategies.Base;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +17,29 @@ namespace OctaneTagJobControlAPI.Services
     /// </summary>
     public static class JobManagerExtensions
     {
+        /// <summary>
+        /// Get all configurations for the job manager
+        /// </summary>
+        public static async Task<List<JobConfiguration>> GetAllConfigurationsAsync(this JobManager jobManager)
+        {
+            // Use reflection to access the _configRepository field since it's private
+            var configRepositoryField = jobManager.GetType().GetField("_configRepository",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+
+            if (configRepositoryField == null)
+            {
+                return new List<JobConfiguration>();
+            }
+
+            var configRepository = configRepositoryField.GetValue(jobManager) as Repositories.IConfigurationRepository;
+            if (configRepository == null)
+            {
+                return new List<JobConfiguration>();
+            }
+
+            return await configRepository.GetAllConfigurationsAsync();
+        }
+
         /// <summary>
         /// Gets all active job IDs
         /// </summary>
@@ -55,7 +79,7 @@ namespace OctaneTagJobControlAPI.Services
 
                 // Use reflection to access the private _jobStrategies field
                 var jobStrategiesField = jobManager.GetType().GetField("_jobStrategies",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    BindingFlags.NonPublic | BindingFlags.Instance);
 
                 if (jobStrategiesField == null)
                 {

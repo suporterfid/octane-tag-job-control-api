@@ -11,6 +11,7 @@ using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 using OctaneTagWritingTest.Helpers;
+using static OctaneTagWritingTest.Helpers.TagOpController;
 
 namespace OctaneTagJobControlAPI.Strategies
 {
@@ -24,20 +25,16 @@ namespace OctaneTagJobControlAPI.Strategies
         StrategyCapability.MultiAntenna | StrategyCapability.Permalock | StrategyCapability.Encoding)]
     public class ImpinjR700CapStrategy : SingleReaderStrategyBase
     {
-        // Configuration 
-        private readonly ConcurrentDictionary<string, Stopwatch> _writeTimers = new ConcurrentDictionary<string, Stopwatch>();
-        private readonly ConcurrentDictionary<string, Stopwatch> _verifyTimers = new ConcurrentDictionary<string, Stopwatch>();
-        private readonly ConcurrentDictionary<string, Stopwatch> _lockTimers = new ConcurrentDictionary<string, Stopwatch>();
-        private readonly ConcurrentDictionary<string, bool> _lockedTags = new ConcurrentDictionary<string, bool>();
+        // For CAP application specific caching
+        private readonly ConcurrentDictionary<string, TagReadData> _lastReadTags = new ConcurrentDictionary<string, TagReadData>();
         private readonly ConcurrentDictionary<string, string> _pendingWrites = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<string, string> _pendingAccessPasswords = new ConcurrentDictionary<string, string>();
 
         private readonly Stopwatch _runTimer = new Stopwatch();
         private JobExecutionStatus _status = new JobExecutionStatus();
         private bool _lockEnabled = true;
-
-        // For CAP application specific caching
-        private readonly ConcurrentDictionary<string, TagReadData> _lastReadTags = new ConcurrentDictionary<string, TagReadData>();
+        private bool _permalockEnabled = false;
+        private string _readerID = "Tunnel-01";
 
         // Fields for manual writing mode
         private bool _manualWriteMode = false;
@@ -57,7 +54,29 @@ namespace OctaneTagJobControlAPI.Strategies
             : base(hostname, logFile, readerSettings, serviceProvider)
         {
             _status.CurrentOperation = "Initialized";
+
+            // Initialize the TagOpController - this is critical for tag operations
             TagOpController.Instance.CleanUp();
+
+            // Extract configuration from reader settings
+            if (readerSettings.TryGetValue("writer", out var writerSettings) &&
+                writerSettings.Parameters != null)
+            {
+                if (writerSettings.Parameters.TryGetValue("enableLock", out var lockStr))
+                {
+                    _lockEnabled = bool.TryParse(lockStr, out bool lockVal) ? lockVal : true;
+                }
+
+                if (writerSettings.Parameters.TryGetValue("enablePermalock", out var permalockStr))
+                {
+                    _permalockEnabled = bool.TryParse(permalockStr, out bool permalockVal) ? permalockVal : false;
+                }
+
+                if (writerSettings.Parameters.TryGetValue("ReaderID", out var readerIDStr))
+                {
+                    _readerID = readerIDStr;
+                }
+            }
         }
 
         /// <summary>
@@ -72,16 +91,6 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 Console.WriteLine("Starting Impinj R700 CAP Strategy...");
                 _runTimer.Start();
-
-                var readerSettings = GetSettingsForRole("writer");
-                _lockEnabled = true;
-
-                if (settings.TryGetValue("writer", out var writerSettings) &&
-                    writerSettings.Parameters != null &&
-                    writerSettings.Parameters.TryGetValue("enableLock", out var lockStr))
-                {
-                    _lockEnabled = bool.TryParse(lockStr, out bool lockVal) ? lockVal : true;
-                }
 
                 // Configure reader
                 ConfigureReader();
@@ -158,8 +167,9 @@ namespace OctaneTagJobControlAPI.Strategies
                         { "FastID", tag.IsFastIdPresent },
                         { "Phase", tag.PhaseAngleInRadians },
                         { "ChannelInMhz", tag.ChannelInMhz },
-                        { "AccessMemory", _lockedTags.ContainsKey(tidHex) ? "locked" : "unlocked" },
-                        { "ReaderID", hostname }
+                        { "AccessMemory", TagOpController.Instance.IsTagLocked(tidHex) ? "locked" : "unlocked" },
+                        { "ReaderID", _readerID },
+                        { "EAN", TagOpController.Instance.GetEanFromEpc(epcHex) ?? "" }
                     }
                 };
 
@@ -175,50 +185,59 @@ namespace OctaneTagJobControlAPI.Strategies
                 // Report tag data to job manager
                 ReportTagData(tagData);
 
+                // Update job status
                 lock (_status)
                 {
                     _status.TotalTagsProcessed = _lastReadTags.Count;
                     _status.SuccessCount = _lastReadTags.Count;
+                    _status.Metrics = new Dictionary<string, object>
+                    {
+                        { "UniqueTagsRead", _lastReadTags.Count },
+                        { "LockedTags", TagOpController.Instance.GetLockedTagsCount() },
+                        { "ReadRate", TagOpController.Instance.GetReadRate() },
+                        { "ElapsedSeconds", _runTimer.Elapsed.TotalSeconds }
+                    };
                 }
 
                 // Check if this tag has a pending write operation
                 if (_manualWriteMode && _pendingWrites.TryGetValue(tidHex, out var newEpc))
                 {
+                    // Get access password
                     string accessPassword = "00000000";
                     _pendingAccessPasswords.TryGetValue(tidHex, out accessPassword);
 
                     Console.WriteLine($"Processing pending write for TID {tidHex}: {epcHex} -> {newEpc}");
 
-                    // Start write timer
-                    var writeTimer = _writeTimers.GetOrAdd(tidHex, _ => new Stopwatch());
-                    writeTimer.Restart();
+                    // Use TagOpController to handle the write operation
+                    var writeSuccess = TagOpController.Instance.TriggerWriteAndVerify(
+                        tag,
+                        newEpc,
+                        reader,
+                        cancellationToken,
+                        new Stopwatch(), // TagOpController manages its own timers
+                        accessPassword,
+                        true, // Verify after writing
+                        1,    // Antenna port
+                        true, // Enable fast ID
+                        3     // Number of retries
+                    );
 
-                    // Configure and execute tag operations
-                    var tagOp = new TagOp();
-                    var writeEpc = new TagWriteOp();
-                    writeEpc.MemoryBank = MemoryBank.Epc;
-                    writeEpc.WordPointer = 2;
-                    writeEpc.Data = TagData.FromHexString(newEpc);
-
-                    // Use the access password if provided
-                    if (!string.IsNullOrEmpty(accessPassword))
+                    // If successful and lock is enabled, use TagOpController to handle locking
+                    if (writeSuccess && _lockEnabled)
                     {
-                        writeEpc.AccessPassword = Convert.ToUInt32(accessPassword, 16);
+                        if (_permalockEnabled)
+                        {
+                            TagOpController.Instance.PermaLockTag(tag, accessPassword, reader);
+                        }
+                        else
+                        {
+                            TagOpController.Instance.LockTag(tag, accessPassword, reader);
+                        }
                     }
 
-                    // Execute the write operation
-                    try
-                    {
-                        sender.ExecuteTagOp(writeEpc, tag);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error writing to tag: {ex.Message}");
-                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{newEpc},Error,{writeTimer.ElapsedMilliseconds},0,WriteError,None,0,{tag.AntennaPortNumber},{tag.PeakRssiInDbm}");
-                    }
-
-                    // Remove from pending writes
+                    // Remove from pending lists
                     _pendingWrites.TryRemove(tidHex, out _);
+                    _pendingAccessPasswords.TryRemove(tidHex, out _);
                 }
             }
         }
@@ -235,105 +254,23 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 var tidHex = result.Tag.Tid?.ToHexString() ?? "N/A";
 
-                // Handle write operation result
-                if (result is TagWriteOpResult writeResult)
+                // TagOpController will handle most of the logic, we just need to update our local cache
+                var epcHex = result.Tag.Epc?.ToHexString() ?? "N/A";
+
+                // Update tag data cache if available
+                if (_lastReadTags.TryGetValue(tidHex, out var tagData))
                 {
-                    // Stop write timer
-                    _writeTimers.TryGetValue(tidHex, out var writeTimer);
-                    if (writeTimer != null)
+                    tagData.EPC = epcHex;
+
+                    // Update lock status
+                    if (result is TagLockOpResult)
                     {
-                        writeTimer.Stop();
+                        tagData.AdditionalData["AccessMemory"] = "locked";
                     }
 
-                    var verifiedEpc = writeResult.Tag.Epc?.ToHexString() ?? "N/A";
-                    var newEpc = _pendingWrites.TryGetValue(tidHex, out var epc) ? epc : verifiedEpc;
-                    var writeStatus = writeResult.Result == WriteResultStatus.Success ? "Success" : "Failure";
-
-                    Console.WriteLine($"Write operation for TID {tidHex}: {writeStatus}, EPC: {verifiedEpc}");
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{newEpc},{verifiedEpc},{writeTimer?.ElapsedMilliseconds ?? 0},0,{writeStatus},None,0,{result.Tag.AntennaPortNumber},{result.Tag.PeakRssiInDbm}");
-
-                    // If successful and lock enabled, perform lock operation
-                    if (writeResult.Result == WriteResultStatus.Success && _lockEnabled &&
-                        _pendingAccessPasswords.TryGetValue(tidHex, out var accessPassword))
-                    {
-                        LockTag(result.Tag, accessPassword);
-                    }
-
-                    // Update tag data cache
-                    if (_lastReadTags.TryGetValue(tidHex, out var tagData))
-                    {
-                        tagData.EPC = verifiedEpc;
-                        tagData.AdditionalData["WriteStatus"] = writeStatus;
-                    }
-
-                    // Remove from pending lists
-                    _pendingWrites.TryRemove(tidHex, out _);
-                    _pendingAccessPasswords.TryRemove(tidHex, out _);
+                    // Update EAN if needed
+                    tagData.AdditionalData["EAN"] = TagOpController.Instance.GetEanFromEpc(epcHex) ?? "";
                 }
-                // Handle lock operation result
-                else if (result is TagLockOpResult lockResult)
-                {
-                    // Stop lock timer
-                    _lockTimers.TryGetValue(tidHex, out var lockTimer);
-                    if (lockTimer != null)
-                    {
-                        lockTimer.Stop();
-                    }
-
-                    bool success = lockResult.Result == LockResultStatus.Success;
-                    string lockStatus = success ? "Locked" : "LockFailed";
-
-                    Console.WriteLine($"Lock operation for TID {tidHex}: {lockStatus}");
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},None,None,0,0,{lockStatus},Locked,{lockTimer?.ElapsedMilliseconds ?? 0},{result.Tag.AntennaPortNumber},{result.Tag.PeakRssiInDbm}");
-
-                    // Update lock status in cache
-                    if (success)
-                    {
-                        _lockedTags[tidHex] = true;
-
-                        if (_lastReadTags.TryGetValue(tidHex, out var tagData))
-                        {
-                            tagData.AdditionalData["AccessMemory"] = "locked";
-                        }
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Locks a tag using its access password
-        /// </summary>
-        private void LockTag(Tag tag, string accessPassword)
-        {
-            var tidHex = tag.Tid?.ToHexString() ?? string.Empty;
-
-            if (string.IsNullOrEmpty(tidHex))
-                return;
-
-            // Start lock timer
-            var lockTimer = _lockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
-            lockTimer.Restart();
-
-            // Create lock operation
-            var lockOp = new TagLockOp();
-            lockOp.AccessPassword = Convert.ToUInt32(accessPassword, 16);
-
-            // Lock EPC memory
-            lockOp.LockMask = TagLockOp.GenerateLockMask(
-                MemoryBank.Epc, TagLockOp.LockType.PermalockType, true);
-            lockOp.LockMask |= TagLockOp.GenerateLockMask(
-                MemoryBank.Epc, TagLockOp.LockType.PermalockType, true);
-
-            // Execute lock operation
-            try
-            {
-                reader.ExecuteTagOp(lockOp, tag);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error locking tag: {ex.Message}");
-                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{tag.Epc.ToHexString()},None,None,0,0,LockError,None,{lockTimer.ElapsedMilliseconds},{tag.AntennaPortNumber},{tag.PeakRssiInDbm}");
-                lockTimer.Stop();
             }
         }
 
@@ -347,18 +284,24 @@ namespace OctaneTagJobControlAPI.Strategies
                 var metrics = new Dictionary<string, object>
                 {
                     { "UniqueTagsRead", _lastReadTags.Count },
-                    { "AvgWriteTimeMs", _writeTimers.Count > 0 ? _writeTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
-                    { "AvgLockTimeMs", _lockTimers.Count > 0 ? _lockTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0 },
-                    { "LockedTags", _lockedTags.Count },
+                    { "AvgWriteTimeMs", TagOpController.Instance.GetAvgWriteTimeMs() },
+                    { "AvgVerifyTimeMs", TagOpController.Instance.GetAvgVerifyTimeMs() },
+                    { "LockedTags", TagOpController.Instance.GetLockedTagsCount() },
+                    { "SuccessCount", TagOpController.Instance.GetSuccessCount() },
+                    { "FailureCount", TagOpController.Instance.GetFailureCount() },
                     { "ElapsedSeconds", _runTimer.Elapsed.TotalSeconds },
-                    { "ReaderHostname", hostname }
+                    { "ReaderHostname", hostname },
+                    { "ReaderID", _readerID },
+                    { "ReadRate", TagOpController.Instance.GetReadRate() },
+                    { "LockEnabled", _lockEnabled },
+                    { "PermalockEnabled", _permalockEnabled }
                 };
 
                 return new JobExecutionStatus
                 {
                     TotalTagsProcessed = _status.TotalTagsProcessed,
-                    SuccessCount = _status.SuccessCount,
-                    FailureCount = _status.FailureCount,
+                    SuccessCount = TagOpController.Instance.GetSuccessCount(),
+                    FailureCount = TagOpController.Instance.GetFailureCount(),
                     ProgressPercentage = _status.ProgressPercentage,
                     CurrentOperation = _status.CurrentOperation,
                     RunTime = _status.RunTime,
@@ -396,6 +339,9 @@ namespace OctaneTagJobControlAPI.Strategies
 
             // Log the pending write
             LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tid},PendingWrite,{newEpc},None,0,0,Pending,None,0,0,0");
+
+            // Also record expected EPC in TagOpController for future verification
+            TagOpController.Instance.RecordExpectedEpc(tid, newEpc);
         }
 
         /// <summary>

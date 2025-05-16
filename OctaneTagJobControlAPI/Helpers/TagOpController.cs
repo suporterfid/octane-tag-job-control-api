@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using static Impinj.OctaneSdk.ImpinjReader;
 
 namespace OctaneTagWritingTest.Helpers
 {
@@ -14,6 +15,10 @@ namespace OctaneTagWritingTest.Helpers
         // Dictionaries for recording operation results.
         private ConcurrentDictionary<string, string> operationResultByTid = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, string> operationResultWithSuccessByTid = new ConcurrentDictionary<string, string>();
+        /// <summary>
+        /// Dictionary to cache tag lock status for previously checked tags
+        /// </summary>
+        private readonly ConcurrentDictionary<string, TagLockStatus> _tagLockStatusCache = new ConcurrentDictionary<string, TagLockStatus>();
 
         private readonly object lockObj = new object();
         private HashSet<string> processedTids = new HashSet<string>();
@@ -31,6 +36,387 @@ namespace OctaneTagWritingTest.Helpers
         public bool IsLocalTargetTidSet { get; private set; }
 
         private readonly object fileLock = new object();
+
+        // Generic Monza/regular tags (Word 4 of Reserved Memory)
+        private const int KillPasswordLockBit = 31;
+        private const int KillPasswordPermalockBit = 30;
+        private const int AccessPasswordLockBit = 29;
+        private const int AccessPasswordPermalockBit = 28;
+        private const int EPCLockBit = 27;
+        private const int EPCPermalockBit = 26;
+        private const int UserMemoryLockBit = 25;
+        private const int UserMemoryPermalockBit = 24;
+        private const int KillBit = 20;
+
+        // M7xx series (different bit positions)
+        private const int M7xxKillPasswordLockBit = 29;
+        private const int M7xxKillPasswordPermalockBit = 28;
+        private const int M7xxKillBit = 18;
+
+        // Monza R6 (Word 5 of Reserved Memory for some bits)
+        private const int MR6EPCLockBit = 14;
+        private const int MR6PermalockBit = 14;
+
+        // TID identifiers for different tag types
+        private const string MR6_TID_Identifier = "E2801160";
+        private const string M730_TID_Identifier = "E2801191";
+        private const string M750_TID_Identifier = "E2801190";
+        private const string M770_TID_Identifier = "E28011A0";
+        private const string M775_TID_Identifier = "E2C011A2";
+        private const string M780_TID_Identifier = "E28011C0";
+        private const string M781_TID_Identifier = "E28011C1";
+        private const string M830_M850_TID_Identifier = "E28011B0";
+
+        public enum TagType
+        {
+            GenericMonza = 1,
+            MonzaR6 = 2,
+            M7xx = 3
+        }
+
+        public enum LockState
+        {
+            Unlocked,
+            Locked,
+            Permalocked
+        }
+
+        public class TagLockStatus
+        {
+            public LockState KillPasswordLockState { get; set; }
+            public LockState AccessPasswordLockState { get; set; }
+            public LockState EpcLockState { get; set; }
+            public LockState UserMemoryLockState { get; set; }
+            public bool IsKilled { get; set; }
+        }
+
+        /// <summary>
+    /// Determines the tag type based on its TID
+    /// </summary>
+    public TagType GetChipModel(Tag tag)
+    {
+        string chipModel = "";
+        if (tag.IsFastIdPresent)
+            chipModel = tag.ModelDetails.ModelName.ToString();
+
+        if (tag == null || tag.Tid == null)
+            return TagType.GenericMonza;
+
+        string tidHex = tag.Tid.ToHexString();
+        
+        if (tidHex.StartsWith(MR6_TID_Identifier))
+            return TagType.MonzaR6;
+        else if (tidHex.StartsWith(M730_TID_Identifier) ||
+                 tidHex.StartsWith(M750_TID_Identifier) ||
+                 tidHex.StartsWith(M770_TID_Identifier) ||
+                 tidHex.StartsWith(M775_TID_Identifier) ||
+                 tidHex.StartsWith(M780_TID_Identifier) ||
+                 tidHex.StartsWith(M781_TID_Identifier) ||
+                 tidHex.StartsWith(M830_M850_TID_Identifier))
+            return TagType.M7xx;
+        else
+            return TagType.GenericMonza;
+    }
+
+        /// <summary>
+        /// Checks if a tag with the given TID is locked in any way
+        /// </summary>
+        /// <param name="tid">TID of the tag to check</param>
+        /// <returns>True if the tag has any memory bank locked or permalocked, false otherwise</returns>
+        public bool IsTagLocked(string tid)
+        {
+            if (string.IsNullOrEmpty(tid))
+                return false;
+
+            // Check if we have cached lock status for this TID
+            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
+            {
+                // Return true if any memory bank is locked or permalocked
+                return lockStatus.KillPasswordLockState != LockState.Unlocked ||
+                       lockStatus.AccessPasswordLockState != LockState.Unlocked ||
+                       lockStatus.EpcLockState != LockState.Unlocked ||
+                       lockStatus.UserMemoryLockState != LockState.Unlocked;
+            }
+
+            // If we don't have cached lock status, we can't determine lock state
+            // You could return a default or throw an exception here
+            return false;
+        }
+
+        /// <summary>
+        /// Checks if a specific memory bank is locked for a tag with the given TID
+        /// </summary>
+        /// <param name="tid">TID of the tag to check</param>
+        /// <param name="memoryBank">Memory bank to check (Kill Password, Access Password, EPC, or User Memory)</param>
+        /// <returns>The lock state of the specified memory bank, or Unlocked if unknown</returns>
+        public LockState GetMemoryBankLockState(string tid, MemoryBank memoryBank)
+        {
+            if (string.IsNullOrEmpty(tid))
+                return LockState.Unlocked;
+
+            // Check if we have cached lock status for this TID
+            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
+            {
+                switch (memoryBank)
+                {
+                    case MemoryBank.Reserved:
+                        // For Reserved, we'll check the access password section
+                        return lockStatus.AccessPasswordLockState;
+                    case MemoryBank.Epc:
+                        return lockStatus.EpcLockState;
+                    case MemoryBank.Tid:
+                        // TID is typically permalocked by manufacturer
+                        return LockState.Permalocked;
+                    case MemoryBank.User:
+                        return lockStatus.UserMemoryLockState;
+                    default:
+                        return LockState.Unlocked;
+                }
+            }
+
+            // If we don't have cached lock status, we can't determine lock state
+            return LockState.Unlocked;
+        }
+
+        /// <summary>
+        /// Checks if the EPC memory bank is locked for a tag with the given TID
+        /// </summary>
+        /// <param name="tid">TID of the tag to check</param>
+        /// <returns>True if the EPC memory bank is locked or permalocked, false otherwise</returns>
+        public bool IsEpcLocked(string tid)
+        {
+            if (string.IsNullOrEmpty(tid))
+                return false;
+
+            // Check if we have cached lock status for this TID
+            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
+            {
+                return lockStatus.EpcLockState != LockState.Unlocked;
+            }
+
+            // If we don't have cached lock status, we can't determine lock state
+            return false;
+        }
+
+        /// <summary>
+        /// Checks if the EPC memory bank is permalocked for a tag with the given TID
+        /// </summary>
+        /// <param name="tid">TID of the tag to check</param>
+        /// <returns>True if the EPC memory bank is permalocked, false otherwise</returns>
+        public bool IsEpcPermalocked(string tid)
+        {
+            if (string.IsNullOrEmpty(tid))
+                return false;
+
+            // Check if we have cached lock status for this TID
+            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
+            {
+                return lockStatus.EpcLockState == LockState.Permalocked;
+            }
+
+            // If we don't have cached lock status, we can't determine lock state
+            return false;
+        }
+
+        /// <summary>
+        /// Updates the cached lock status for a tag
+        /// </summary>
+        /// <param name="tid">TID of the tag</param>
+        /// <param name="lockStatus">Lock status information</param>
+        public void UpdateTagLockStatus(string tid, TagLockStatus lockStatus)
+        {
+            if (!string.IsNullOrEmpty(tid) && lockStatus != null)
+            {
+                _tagLockStatusCache[tid] = lockStatus;
+            }
+        }
+
+
+        /// <summary>
+        /// Gets tag lock status by reading reserved memory and analyzing lock bits
+        /// </summary>
+        public void GetTagLockStatus(Tag tag, ImpinjReader reader, Action<TagLockStatus> callback)
+        {
+            if (tag == null || reader == null || !reader.IsConnected)
+                return;
+
+            string tid = tag.Tid?.ToHexString() ?? string.Empty;
+            if (string.IsNullOrEmpty(tid))
+            {
+                callback?.Invoke(null);
+                return;
+            }
+
+            // Check if we already have this in cache
+            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus cachedStatus))
+            {
+                callback?.Invoke(cachedStatus);
+                return;
+            }
+
+            try
+            {
+                // Create a tag operation sequence
+                TagOpSequence seq = new TagOpSequence();
+                seq.TargetTag = new TargetTag();
+                seq.TargetTag.MemoryBank = MemoryBank.Epc;
+                seq.TargetTag.BitPointer = BitPointers.Epc;
+                seq.TargetTag.Data = tag.Epc.ToHexString();
+
+                // Create a tag read operation to read reserved memory (words 4-5)
+                TagReadOp readReservedMem = new TagReadOp();
+                readReservedMem.MemoryBank = MemoryBank.Reserved;
+                readReservedMem.WordPointer = 4; // Reading from word 4
+                readReservedMem.WordCount = 2;   // Reading 2 words (words 4 and 5)
+
+                // Add the operation to sequence
+                seq.Ops.Add(readReservedMem);
+
+                // Create the handler that matches the TagOpCompleteHandler delegate signature
+                TagOpCompleteHandler handler = null;
+                handler = (ImpinjReader sender, TagOpReport report) =>
+                {
+                    reader.TagOpComplete -= handler;
+                    reader.Stop();
+
+                    foreach (TagOpResult result in report)
+                    {
+                        if (result is TagReadOpResult readResult)
+                        {
+                            if (readResult.Result == ReadResultStatus.Success)
+                            {
+                                uint lockBits = readResult.Data.ToUnsignedInt();
+                                TagLockStatus lockStatus = ProcessLockBits(lockBits, GetChipModel(readResult.Tag));
+
+                                // Update the cache with the new lock status
+                                if (lockStatus != null)
+                                {
+                                    UpdateTagLockStatus(tid, lockStatus);
+                                }
+
+                                callback?.Invoke(lockStatus);
+                                return;
+                            }
+                        }
+                    }
+                    callback?.Invoke(null);
+                };
+
+                // Register the handler and start the reader
+                reader.TagOpComplete += handler;
+                reader.AddOpSequence(seq);
+                reader.Start();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error getting tag lock status: {ex.Message}");
+                callback?.Invoke(null);
+            }
+        }
+
+        /// <summary>
+        /// Process lock bits to determine lock status of various memory banks
+        /// </summary>
+        private TagLockStatus ProcessLockBits(uint lockBits, TagType tagType)
+    {
+        TagLockStatus status = new TagLockStatus();
+
+        // Check Kill Password lock status
+        bool killPasswordLockBit = false;
+        bool killPasswordPermalockBit = false;
+
+        switch (tagType)
+        {
+            case TagType.GenericMonza:
+            case TagType.MonzaR6:
+                killPasswordLockBit = IsBitSet(lockBits, KillPasswordLockBit);
+                killPasswordPermalockBit = IsBitSet(lockBits, KillPasswordPermalockBit);
+                break;
+            case TagType.M7xx:
+                killPasswordLockBit = IsBitSet(lockBits, M7xxKillPasswordLockBit);
+                killPasswordPermalockBit = IsBitSet(lockBits, M7xxKillPasswordPermalockBit);
+                break;
+        }
+
+        if (killPasswordPermalockBit)
+            status.KillPasswordLockState = LockState.Permalocked;
+        else if (killPasswordLockBit)
+            status.KillPasswordLockState = LockState.Locked;
+        else
+            status.KillPasswordLockState = LockState.Unlocked;
+
+        // Check Access Password lock status
+        bool accessPasswordLockBit = IsBitSet(lockBits, AccessPasswordLockBit);
+        bool accessPasswordPermalockBit = IsBitSet(lockBits, AccessPasswordPermalockBit);
+
+        if (accessPasswordPermalockBit)
+            status.AccessPasswordLockState = LockState.Permalocked;
+        else if (accessPasswordLockBit)
+            status.AccessPasswordLockState = LockState.Locked;
+        else
+            status.AccessPasswordLockState = LockState.Unlocked;
+
+        // Check EPC lock status
+        bool epcLockBit = false;
+        bool epcPermalockBit = false;
+
+        switch (tagType)
+        {
+            case TagType.GenericMonza:
+            case TagType.M7xx:
+                epcLockBit = IsBitSet(lockBits, EPCLockBit);
+                epcPermalockBit = IsBitSet(lockBits, EPCPermalockBit);
+                break;
+            case TagType.MonzaR6:
+                // For Monza R6, some bits are in word 5
+                epcLockBit = IsBitSet(lockBits, MR6EPCLockBit);
+                epcPermalockBit = IsBitSet(lockBits, MR6PermalockBit);
+                break;
+        }
+
+        if (epcPermalockBit)
+            status.EpcLockState = LockState.Permalocked;
+        else if (epcLockBit)
+            status.EpcLockState = LockState.Locked;
+        else
+            status.EpcLockState = LockState.Unlocked;
+
+        // Check User Memory lock status
+        bool userMemoryLockBit = IsBitSet(lockBits, UserMemoryLockBit);
+        bool userMemoryPermalockBit = IsBitSet(lockBits, UserMemoryPermalockBit);
+
+        if (userMemoryPermalockBit)
+            status.UserMemoryLockState = LockState.Permalocked;
+        else if (userMemoryLockBit)
+            status.UserMemoryLockState = LockState.Locked;
+        else
+            status.UserMemoryLockState = LockState.Unlocked;
+
+        // Check if tag is killed
+        bool killBit = false;
+        switch (tagType)
+        {
+            case TagType.GenericMonza:
+            case TagType.MonzaR6:
+                killBit = IsBitSet(lockBits, KillBit);
+                break;
+            case TagType.M7xx:
+                killBit = IsBitSet(lockBits, M7xxKillBit);
+                break;
+        }
+        status.IsKilled = killBit;
+
+        return status;
+    }
+
+    /// <summary>
+    /// Helper method to check if a specific bit is set in a value
+    /// </summary>
+    private bool IsBitSet(uint value, int bitPosition)
+    {
+        return (value & (1u << bitPosition)) != 0;
+    }
+
 
         public void CleanUp()
         {
@@ -599,15 +985,6 @@ namespace OctaneTagWritingTest.Helpers
             // Log the CSV entry.
             string logLine = $"{timestamp},{tidHex},{currentTargetTag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{writeTime},{verifyTime},{resultStatus},{retries},{resultRssi},{antennaPort},{chipModel}";
             LogToCsv(logFile, logLine);
-        }
-
-        // Utility method to extract chip model information.
-        public string GetChipModel(Tag tag)
-        {
-            string chipModel = "";
-            if (tag.IsFastIdPresent)
-                chipModel = tag.ModelDetails.ModelName.ToString();
-            return chipModel;
         }
 
         /// <summary>
