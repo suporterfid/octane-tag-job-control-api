@@ -33,21 +33,4 @@
         /// </summary>
         public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
     }
-
-    /// <summary>
-    /// Request model for starting a job.
-    /// </summary>
-    public class StartJobRequest
-    {
-        /// <summary>
-        /// Gets or sets the ID of the job to start.
-        /// </summary>
-        public string JobId { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Gets or sets the timeout in seconds for the job.
-        /// Default is 300 seconds (5 minutes).
-        /// </summary>
-        public int TimeoutSeconds { get; set; } = 300;
-    }
 }

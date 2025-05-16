@@ -1,7 +1,9 @@
 ﻿// OctaneTagJobControlAPI/Extensions/ServiceCollectionExtensions.cs
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OctaneTagJobControlAPI.Repositories;
 using OctaneTagJobControlAPI.Services.Storage;
+using Serilog;
 
 namespace OctaneTagJobControlAPI.Extensions
 {
@@ -30,18 +32,13 @@ namespace OctaneTagJobControlAPI.Extensions
         /// </summary>
         public static IServiceCollection AddStrategyLogging(this IServiceCollection services)
         {
-            // Add logger for strategy base classes
-            services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
-
-            // Add specific loggers for strategy classes
-            services.AddSingleton<ILogger<OctaneTagJobControlAPI.Strategies.Base.JobStrategyBase>>();
-            services.AddSingleton<ILogger<OctaneTagJobControlAPI.Strategies.Base.SingleReaderStrategyBase>>();
-            services.AddSingleton<ILogger<OctaneTagJobControlAPI.Strategies.Base.MultiReaderStrategyBase>>();
-            services.AddSingleton<ILogger<OctaneTagJobControlAPI.Strategies.MultiReaderEnduranceStrategy>>();
-
-            // These types may need to be adjusted to match your actual strategy class names
-            services.AddSingleton<ILogger<OctaneTagJobControlAPI.Strategies.ReadOnlyLoggingStrategy>>();
-            // Add other strategy classes as needed
+            // Add logging
+            services.AddLogging(builder =>
+            {
+                builder.AddConsole();
+                builder.AddDebug();
+                builder.AddSerilog();
+            });
 
             return services;
         }

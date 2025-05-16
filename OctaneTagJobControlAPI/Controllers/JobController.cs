@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Services;
+using OctaneTagJobControlAPI.Repositories;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
@@ -14,6 +15,7 @@ namespace OctaneTagJobControlAPI.Controllers
         private readonly ILogger<JobController> _logger;
         private readonly JobManager _jobManager;
         private readonly JobConfigurationService _configService;
+        private readonly IJobRepository _jobRepository;
 
         // Error message constants
         private const string JOB_ALREADY_RUNNING_ERROR = "Another job is currently running. Only one job can be active at a time.";
@@ -27,11 +29,13 @@ namespace OctaneTagJobControlAPI.Controllers
         public JobController(
             ILogger<JobController> logger,
             JobManager jobManager,
-            JobConfigurationService configService)
+            JobConfigurationService configService,
+            IJobRepository jobRepository)
         {
             _logger = logger;
             _jobManager = jobManager;
             _configService = configService;
+            _jobRepository = jobRepository;
         }
 
         /// <summary>
@@ -262,7 +266,7 @@ namespace OctaneTagJobControlAPI.Controllers
                     });
                 }
 
-                // Start the job
+                // Start the job with configuration if provided
                 int timeout = request != null ? request.TimeoutSeconds : 300;
                 bool success = await _jobManager.StartJobAsync(jobId, timeout);
 

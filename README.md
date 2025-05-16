@@ -154,6 +154,265 @@ Multi-reader strategy for endurance testing that can utilize up to three readers
 - Cycle count tracking
 - Performance metrics for write, verify, and lock operations
 - Automatic retry on verification failure
+- GPI/GPO support for tag presence detection and status indication
+- Flexible reader role combinations
+
+#### Configuration Options
+
+The strategy supports various reader role combinations:
+- Full configuration (detector + writer + verifier)
+- Writer-only configuration
+- Writer-verifier configuration
+- Verifier-only configuration with GPI settings
+
+Each reader can be configured with:
+- Hostname/IP and power settings
+- GPI trigger settings for tag detection
+- GPO settings for operation status indication
+- Lock/permalock options (for writer)
+- Verification timeouts and retry settings
+
+#### Example Configurations
+
+1. **Full Configuration (All Readers)**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "FullEnduranceTest",
+    "strategyType": "MultiReaderEnduranceStrategy",
+    "readerSettings": {
+      "detector": {
+        "hostname": "192.168.68.248",
+        "txPowerInDbm": 18,
+        "parameters": {
+          "enableGpiTrigger": "false"
+        }
+      },
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableLock": "true",
+          "enablePermalock": "false"
+        }
+      },
+      "verifier": {
+        "hostname": "192.168.68.93",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableGpiTrigger": "false"
+        }
+      }
+    }
+  }'
+```
+Expected response:
+```json
+{
+  "jobId": "job123",
+  "status": "Created",
+  "metrics": {
+    "activeRoles": "Detector Writer Verifier",
+    "hasDetectorRole": true,
+    "hasWriterRole": true,
+    "hasVerifierRole": true
+  }
+}
+```
+
+2. **Writer-Only Configuration**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "WriterOnlyTest",
+    "strategyType": "MultiReaderEnduranceStrategy",
+    "readerSettings": {
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableLock": "true",
+          "enablePermalock": "false",
+          "enableGpiTrigger": "false"
+        }
+      }
+    }
+  }'
+```
+Expected response:
+```json
+{
+  "jobId": "job124",
+  "status": "Created",
+  "metrics": {
+    "activeRoles": "Writer",
+    "hasDetectorRole": false,
+    "hasWriterRole": true,
+    "hasVerifierRole": false
+  }
+}
+```
+
+3. **Writer-Verifier with GPI Settings**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "WriterVerifierGpiTest",
+    "strategyType": "MultiReaderEnduranceStrategy",
+    "readerSettings": {
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableLock": "true"
+        }
+      },
+      "verifier": {
+        "hostname": "192.168.68.93",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableGpiTrigger": "true",
+          "gpiPort": "1",
+          "gpiTriggerState": "true",
+          "enableGpoOutput": "true",
+          "gpoPort": "1",
+          "gpoVerificationTimeoutMs": "1000"
+        }
+      }
+    }
+  }'
+```
+Expected response:
+```json
+{
+  "jobId": "job125",
+  "status": "Created",
+  "metrics": {
+    "activeRoles": "Writer Verifier",
+    "hasDetectorRole": false,
+    "hasWriterRole": true,
+    "hasVerifierRole": true,
+    "verifierGpiEnabled": true,
+    "verifierGpiPort": "1",
+    "verifierGpoEnabled": true,
+    "verifierGpoPort": "1"
+  }
+}
+```
+
+4. **Verifier-Only with GPI Settings**
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "VerifierOnlyGpiTest",
+    "strategyType": "MultiReaderEnduranceStrategy",
+    "readerSettings": {
+      "verifier": {
+        "hostname": "192.168.68.93",
+        "txPowerInDbm": 33,
+        "parameters": {
+          "enableGpiTrigger": "true",
+          "gpiPort": "1",
+          "gpiTriggerState": "true",
+          "enableGpoOutput": "true",
+          "gpoPort": "1",
+          "gpoVerificationTimeoutMs": "1000"
+        }
+      }
+    }
+  }'
+```
+Expected response:
+```json
+{
+  "jobId": "job126",
+  "status": "Created",
+  "metrics": {
+    "activeRoles": "Verifier",
+    "hasDetectorRole": false,
+    "hasWriterRole": false,
+    "hasVerifierRole": true,
+    "verifierGpiEnabled": true,
+    "verifierGpiPort": "1",
+    "verifierGpoEnabled": true,
+    "verifierGpoPort": "1"
+  }
+}
+```
+
+#### Monitoring Job Status
+
+The job status response includes detailed metrics for each active reader role:
+
+```bash
+curl -X GET "http://localhost:5000/api/job/{jobId}"
+```
+
+Example response:
+```json
+{
+  "status": "Running",
+  "metrics": {
+    "activeRoles": "Writer Verifier",
+    "cycleCount": 42,
+    "maxCycle": 100,
+    "avgWriteTimeMs": 15.5,
+    "avgVerifyTimeMs": 8.2,
+    "avgLockTimeMs": 20.1,
+    "lockedTags": 42,
+    "gpiEventsTotal": 50,
+    "gpiEventsVerified": 48,
+    "gpiEventsMissingTag": 2,
+    "readerMetrics": {
+      "writer": {
+        "readRate": 150.5,
+        "successCount": 42,
+        "failureCount": 0,
+        "avgWriteTimeMs": 15.5,
+        "lockedTags": 42
+      },
+      "verifier": {
+        "readRate": 160.2,
+        "successCount": 42,
+        "failureCount": 0,
+        "avgVerifyTimeMs": 8.2
+      }
+    }
+  }
+}
+```
+
+#### Monitoring Job Status and Metrics
+
+- Use `GET /api/job/{jobId}` to retrieve the current status of the job, including:
+  - Current operation state
+  - Success/failure counts
+  - Reader roles and states
+  - Current cycle count
+- Use `GET /api/job/{jobId}/metrics` to get detailed metrics including:
+  - Write operation performance
+  - Verification success rate
+  - Lock operation statistics
+  - Reader-specific metrics
+  - Tag operation timing data
+- Use `GET /api/job/{jobId}/logs` to view job logs with detailed operation history
+- Use `GET /api/job/{jobId}/tags` to get tag read/write data including:
+  - TID/EPC pairs
+  - Operation timestamps
+  - Success/failure status
+  - Reader identification
+
+#### Stopping a Job
+
+To stop a running job, use:
+
+```bash
+curl -X POST "http://localhost:5000/api/job/{jobId}/stop"
+```
 
 ### SpeedTestStrategy
 Performance testing strategy for evaluating tag operation speed and reliability.

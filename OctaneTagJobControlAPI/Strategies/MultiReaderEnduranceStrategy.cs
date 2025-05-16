@@ -27,6 +27,7 @@ namespace OctaneTagJobControlAPI.Strategies
     {
         private const int MaxCycles = 10000;
         private readonly ConcurrentDictionary<string, int> cycleCount = new();
+        private readonly ConcurrentDictionary<string, ReaderMetrics> readerMetrics = new();
         private readonly ConcurrentDictionary<string, Stopwatch> swWriteTimers = new();
         private readonly ConcurrentDictionary<string, Stopwatch> swVerifyTimers = new();
         private readonly ConcurrentDictionary<string, Stopwatch> swLockTimers = new();
@@ -90,6 +91,7 @@ namespace OctaneTagJobControlAPI.Strategies
             status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
 
+
             // Determine which reader roles are available
             hasDetectorRole = !string.IsNullOrWhiteSpace(detectorHostname) &&
                            readerSettings.ContainsKey("detector") &&
@@ -102,6 +104,45 @@ namespace OctaneTagJobControlAPI.Strategies
             hasVerifierRole = !string.IsNullOrWhiteSpace(verifierHostname) &&
                            readerSettings.ContainsKey("verifier") &&
                            !string.IsNullOrWhiteSpace(readerSettings["verifier"].Hostname);
+
+            // Initialize reader metrics after roles are determined
+            if (hasDetectorRole)
+            {
+                readerMetrics["detector"] = new ReaderMetrics
+                {
+                    Role = "detector",
+                    Hostname = detectorHostname,
+                    ReaderID = settings.TryGetValue("detector", out var detSettings) && 
+                              detSettings.Parameters != null && 
+                              detSettings.Parameters.TryGetValue("ReaderID", out var detId) ? detId : "Detector-01"
+                };
+            }
+
+            if (hasWriterRole)
+            {
+                readerMetrics["writer"] = new ReaderMetrics
+                {
+                    Role = "writer",
+                    Hostname = writerHostname,
+                    ReaderID = settings.TryGetValue("writer", out var writerSettings) && 
+                              writerSettings.Parameters != null && 
+                              writerSettings.Parameters.TryGetValue("ReaderID", out var writerId) ? writerId : "Writer-01",
+                    LockEnabled = enableLock,
+                    PermalockEnabled = enablePermalock
+                };
+            }
+
+            if (hasVerifierRole)
+            {
+                readerMetrics["verifier"] = new ReaderMetrics
+                {
+                    Role = "verifier",
+                    Hostname = verifierHostname,
+                    ReaderID = settings.TryGetValue("verifier", out var verifierSettings) && 
+                              verifierSettings.Parameters != null && 
+                              verifierSettings.Parameters.TryGetValue("ReaderID", out var verifierId) ? verifierId : "Verifier-01"
+                };
+            }
 
             // Determine operational mode based on available readers
             operatingAsDetectorOnly = hasDetectorRole && !hasWriterRole && !hasVerifierRole;
@@ -1493,6 +1534,36 @@ namespace OctaneTagJobControlAPI.Strategies
                     metrics["WriterGpoEnabled"] = wGpoEnabled;
                     metrics["WriterGpoPort"] = wGpoPort;
                 }
+
+                // Update reader-specific metrics
+                var readerMetricsDict = new Dictionary<string, ReaderMetrics>();
+                foreach (var kvp in readerMetrics)
+                {
+                    var role = kvp.Key;
+                    var readerMetric = kvp.Value;
+
+                    // Update common metrics
+                    readerMetric.ReadRate = TagOpController.Instance.GetReadRate();
+                    readerMetric.SuccessCount = TagOpController.Instance.GetSuccessCount();
+                    readerMetric.FailureCount = TagOpController.Instance.GetFailureCount();
+
+                    // Update role-specific metrics
+                    switch (role)
+                    {
+                        case "writer":
+                            readerMetric.AvgWriteTimeMs = swWriteTimers.Count > 0 ? swWriteTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0;
+                            readerMetric.LockedTags = lockedTags.Count;
+                            break;
+                        case "verifier":
+                            readerMetric.AvgVerifyTimeMs = swVerifyTimers.Count > 0 ? swVerifyTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0;
+                            break;
+                    }
+
+                    readerMetricsDict[role] = readerMetric;
+                }
+
+                // Add reader metrics to the overall metrics
+                metrics["ReaderMetrics"] = readerMetricsDict;
 
                 return new JobExecutionStatus
                 {

@@ -357,3 +357,8 @@ OctaneTagWritingTest/bin/Debug/net8.0/TestCase1_Log.csv
 /OctaneTagJobControlAPI/obj
 /OctaneTagJobControlAPI/Data
 /OctaneTagJobControlAPI/Logs
+/OctaneTagJobControlAPI.Tests/.vs
+/OctaneTagJobControlAPI.Tests/bin
+/OctaneTagJobControlAPI.Tests/obj
+/OctaneTagJobControlAPI.Tests/Data
+/OctaneTagJobControlAPI.Tests/Logs
