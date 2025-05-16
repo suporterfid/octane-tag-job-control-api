@@ -28,14 +28,16 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// <param name="verifierHostname">The hostname of the verifier RFID reader</param>
         /// <param name="logFile">The path to the log file</param>
         /// <param name="settings">Dictionary of reader settings</param>
+        /// <param name="logger">Logger for this strategy</param>
         protected MultiReaderStrategyBase(
             string detectorHostname,
             string writerHostname,
             string verifierHostname,
             string logFile,
             Dictionary<string, ReaderSettings> settings,
-            IServiceProvider serviceProvider = null)
-            : base(logFile, settings, serviceProvider)
+            IServiceProvider serviceProvider = null,
+            ILogger logger = null)
+            : base(logFile, settings, serviceProvider, logger)
         {
             this.detectorHostname = detectorHostname;
             this.writerHostname = writerHostname;
@@ -56,6 +58,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 var detectorSettings = GetSettingsForRole("detector");
 
+                LogInformation("Connecting to detector reader at {Hostname}", detectorHostname);
                 detectorReader.Connect(detectorHostname);
                 detectorReader.ApplyDefaultSettings();
 
@@ -86,11 +89,15 @@ namespace OctaneTagJobControlAPI.Strategies.Base
                 EnableLowLatencyReporting(settings, detectorReader);
                 detectorReader.ApplySettings(settings);
 
+                LogInformation("Detector reader configured successfully with AntennaPort={AntennaPort}, TxPower={TxPower}dBm",
+                    detectorSettings.AntennaPort, detectorSettings.TxPowerInDbm);
+
+
                 return settings;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error configuring detector reader: {ex.Message}");
+                LogError(ex, "Error configuring detector reader at {Hostname}: {Message}", detectorHostname, ex.Message);
                 throw;
             }
         }
@@ -104,6 +111,8 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             try
             {
                 var writerSettings = GetSettingsForRole("writer");
+
+                LogInformation("Connecting to writer reader at {Hostname}", writerHostname);
 
                 writerReader.Connect(writerHostname);
                 writerReader.ApplyDefaultSettings();
@@ -135,11 +144,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
                 EnableLowLatencyReporting(settings, writerReader);
                 writerReader.ApplySettings(settings);
 
+                LogInformation("Writer reader configured successfully with AntennaPort={AntennaPort}, TxPower={TxPower}dBm",
+                    writerSettings.AntennaPort, writerSettings.TxPowerInDbm);
+
                 return settings;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error configuring writer reader: {ex.Message}");
+                LogError(ex, "Error configuring writer reader at {Hostname}: {Message}", writerHostname, ex.Message);
                 throw;
             }
         }
@@ -154,6 +166,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 var verifierSettings = GetSettingsForRole("verifier");
 
+                LogInformation("Connecting to verifier reader at {Hostname}", verifierHostname);
                 verifierReader.Connect(verifierHostname);
                 verifierReader.ApplyDefaultSettings();
 
@@ -184,11 +197,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
                 EnableLowLatencyReporting(settings, verifierReader);
                 verifierReader.ApplySettings(settings);
 
+                LogInformation("Verifier reader configured successfully with AntennaPort={AntennaPort}, TxPower={TxPower}dBm",
+                    verifierSettings.AntennaPort, verifierSettings.TxPowerInDbm);
+
                 return settings;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error configuring verifier reader: {ex.Message}");
+                LogError(ex, "Error configuring verifier reader at {Hostname}: {Message}", verifierHostname, ex.Message);
                 throw;
             }
         }
@@ -202,6 +218,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         {
             if (!settings.ContainsKey(role))
             {
+                LogWarning("No settings found for role: {Role}", role);
                 throw new ArgumentException($"No settings found for role: {role}");
             }
             return settings[role];
@@ -214,13 +231,22 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// <param name="reader">The reader to apply settings to</param>
         protected void EnableLowLatencyReporting(Settings settings, ImpinjReader reader)
         {
-            MSG_ADD_ROSPEC addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
-            MSG_SET_READER_CONFIG setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
-            setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
+            try
             {
-                ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
-            });
-            reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
+                MSG_ADD_ROSPEC addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
+                MSG_SET_READER_CONFIG setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
+                setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
+                {
+                    ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
+                });
+                reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
+                LogDebug("Low latency reporting enabled for reader {ReaderName}", reader.Name ?? "unnamed");
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "Error enabling low latency reporting: {Message}", ex.Message);
+            }
+
         }
 
         /// <summary>
@@ -232,19 +258,21 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 if (detectorReader != null)
                 {
+                    LogInformation("Stopping and disconnecting detector reader");
                     detectorReader.Stop();
                     detectorReader.Disconnect();
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during detector reader cleanup: {ex.Message}");
+                LogError(ex, "Error during detector reader cleanup: {Message}", ex.Message);
             }
 
             try
             {
                 if (writerReader != null)
                 {
+                    LogInformation("Stopping and disconnecting writer reader");
                     writerReader.Stop();
                     writerReader.Disconnect();
                 }
@@ -258,13 +286,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 if (verifierReader != null)
                 {
+                    LogInformation("Stopping and disconnecting verifier reader");
                     verifierReader.Stop();
                     verifierReader.Disconnect();
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during verifier reader cleanup: {ex.Message}");
+                LogError(ex, "Error during verifier reader cleanup: {Message}", ex.Message);
             }
         }
 

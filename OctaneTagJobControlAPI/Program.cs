@@ -7,8 +7,20 @@ using Microsoft.OpenApi.Models;
 using OctaneTagWritingTest.Helpers;
 using System.Text.Json.Serialization;
 using OctaneTagJobControlAPI.Repositories;
+using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("Logs/api-.log", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+builder.Host.UseSerilog();
 
 // Add services to the container
 builder.Services.AddControllers()
@@ -38,6 +50,9 @@ builder.Services.AddSwaggerGen(c =>
 // Configure persistence services
 var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, "Data");
 builder.Services.AddPersistenceServices(dataDirectory);
+
+// Add logging for strategy classes
+builder.Services.AddStrategyLogging();
 
 // Configure application services
 builder.Services.AddScoped<IJobRepository, JobRepository>();
@@ -78,6 +93,9 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Configure Serilog request logging
+app.UseSerilogRequestLogging();
+
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseAuthorization();
@@ -87,4 +105,16 @@ app.MapControllers();
 var configService = app.Services.GetRequiredService<JobConfigurationService>();
 await configService.InitializeDefaultConfigAsync();
 
-app.Run();
+try
+{
+    Log.Information("Starting RFID Job Control API");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "RFID Job Control API terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}

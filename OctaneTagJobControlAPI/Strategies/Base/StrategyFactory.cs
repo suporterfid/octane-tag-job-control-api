@@ -64,21 +64,27 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 IJobStrategy strategy;
 
+                // Get the appropriate logger type for the strategy
+                var loggerType = typeof(ILogger<>).MakeGenericType(strategyType);
+
+                // Try to resolve the logger from the service provider
+                var logger = _serviceProvider.GetService(loggerType);
+
                 // Create strategy based on its requirements
                 if (typeof(MultiReaderStrategyBase).IsAssignableFrom(strategyType))
                 {
                     _logger.LogInformation("Creating multi-reader strategy: {StrategyName}", strategyName);
-                    strategy = CreateMultiReaderStrategy(strategyType, config);
+                    strategy = CreateMultiReaderStrategy(strategyType, config, logger);
                 }
                 else if (strategyName == "CheckBoxStrategy")
                 {
                     _logger.LogInformation("Creating CheckBox strategy");
-                    strategy = CreateCheckBoxStrategy(strategyType, config);
+                    strategy = CreateCheckBoxStrategy(strategyType, config, logger);
                 }
                 else
                 {
                     _logger.LogInformation("Creating single-reader strategy: {StrategyName}", strategyName);
-                    strategy = CreateSingleReaderStrategy(strategyType, config);
+                    strategy = CreateSingleReaderStrategy(strategyType, config, logger);
                 }
 
                 // Set up the strategy with JobId
@@ -104,28 +110,60 @@ namespace OctaneTagJobControlAPI.Strategies
         /// <summary>
         /// Create a multi-reader strategy instance
         /// </summary>
-        private IJobStrategy CreateMultiReaderStrategy(Type strategyType, StrategyConfiguration config)
+        private IJobStrategy CreateMultiReaderStrategy(Type strategyType, StrategyConfiguration config, object logger)
         {
+            // Handle the case where logger may be null
+            if (logger == null)
+            {
+                return (IJobStrategy)Activator.CreateInstance(
+                    strategyType,
+                    config.ReaderSettings.Detector?.Hostname,
+                    config.ReaderSettings.Writer?.Hostname,
+                    config.ReaderSettings.Verifier?.Hostname,
+                    config.LogFilePath,
+                    ConvertReaderSettings(config.ReaderSettings),
+                    _serviceProvider);
+            }
+
+            // Include logger in the constructor parameters
             return (IJobStrategy)Activator.CreateInstance(
                 strategyType,
-                config.ReaderSettings.Detector.Hostname,
-                config.ReaderSettings.Writer.Hostname,
-                config.ReaderSettings.Verifier.Hostname,
+                config.ReaderSettings.Detector?.Hostname,
+                config.ReaderSettings.Writer?.Hostname,
+                config.ReaderSettings.Verifier?.Hostname,
                 config.LogFilePath,
                 ConvertReaderSettings(config.ReaderSettings),
-                _serviceProvider);
+                _serviceProvider,
+                logger);
         }
 
         /// <summary>
         /// Create a CheckBox strategy instance
         /// </summary>
-        private IJobStrategy CreateCheckBoxStrategy(Type strategyType, StrategyConfiguration config)
+        private IJobStrategy CreateCheckBoxStrategy(Type strategyType, StrategyConfiguration config, object logger)
         {
             if (!(config is EncodingStrategyConfiguration encodingConfig))
             {
                 throw new ArgumentException("CheckBoxStrategy requires EncodingStrategyConfiguration");
             }
 
+            // Handle the case where logger may be null
+            if (logger == null)
+            {
+                return (IJobStrategy)Activator.CreateInstance(
+                    strategyType,
+                    config.ReaderSettings.Writer.Hostname,
+                    config.LogFilePath,
+                    ConvertReaderSettings(config.ReaderSettings),
+                    encodingConfig.EpcHeader,
+                    encodingConfig.Sku,
+                    encodingConfig.EncodingMethod,
+                    encodingConfig.PartitionValue,
+                    encodingConfig.ItemReference,
+                    _serviceProvider);
+            }
+
+            // Include logger in the constructor parameters
             return (IJobStrategy)Activator.CreateInstance(
                 strategyType,
                 config.ReaderSettings.Writer.Hostname,
@@ -136,20 +174,34 @@ namespace OctaneTagJobControlAPI.Strategies
                 encodingConfig.EncodingMethod,
                 encodingConfig.PartitionValue,
                 encodingConfig.ItemReference,
-                _serviceProvider);
+                _serviceProvider,
+                logger);
         }
 
         /// <summary>
         /// Create a single-reader strategy instance
         /// </summary>
-        private IJobStrategy CreateSingleReaderStrategy(Type strategyType, StrategyConfiguration config)
+        private IJobStrategy CreateSingleReaderStrategy(Type strategyType, StrategyConfiguration config, object logger)
         {
+            // Handle the case where logger may be null
+            if (logger == null)
+            {
+                return (IJobStrategy)Activator.CreateInstance(
+                    strategyType,
+                    config.ReaderSettings.Writer?.Hostname,
+                    config.LogFilePath,
+                    ConvertReaderSettings(config.ReaderSettings),
+                    _serviceProvider);
+            }
+
+            // Include logger in the constructor parameters
             return (IJobStrategy)Activator.CreateInstance(
                 strategyType,
-                config.ReaderSettings.Writer.Hostname,
+                config.ReaderSettings.Writer?.Hostname,
                 config.LogFilePath,
                 ConvertReaderSettings(config.ReaderSettings),
-                _serviceProvider);
+                _serviceProvider,
+                logger);
         }
 
         /// <summary>

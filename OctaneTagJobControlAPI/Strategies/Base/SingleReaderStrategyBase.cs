@@ -22,12 +22,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// <param name="hostname">The hostname of the RFID reader</param>
         /// <param name="logFile">The path to the log file</param>
         /// <param name="settings">Dictionary of reader settings</param>
+        /// <param name="logger">Logger for this strategy</param>
         protected SingleReaderStrategyBase(
             string hostname,
             string logFile,
             Dictionary<string, ReaderSettings> settings,
-            IServiceProvider serviceProvider = null)
-            : base(logFile, settings, serviceProvider)
+            IServiceProvider serviceProvider = null,
+            ILogger logger = null)
+            : base(logFile, settings, serviceProvider, logger)
         {
             this.hostname = hostname;
             reader = new ImpinjReader();
@@ -45,6 +47,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             try
             {
                 // Connect to the reader
+                LogInformation("Connecting to reader at {Hostname} with role {Role}", readerSettings.Hostname, role);
                 reader.Connect(readerSettings.Hostname);
                 reader.ApplyDefaultSettings();
 
@@ -79,12 +82,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
 
                 // Apply the settings
                 reader.ApplySettings(settings);
+                LogInformation("Reader configured successfully with AntennaPort={AntennaPort}, TxPower={TxPower}dBm",
+                    readerSettings.AntennaPort, readerSettings.TxPowerInDbm);
 
                 return settings;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error configuring reader: {ex.Message}");
+                LogError(ex, "Error configuring reader {Hostname}: {Message}", readerSettings.Hostname, ex.Message);
                 throw;
             }
         }
@@ -98,10 +103,9 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         {
             if (!settings.ContainsKey(role))
             {
-                throw new ArgumentException($"No settings found for role: {role}");
+                LogWarning("No settings found for role: {Role}, using default settings", role);
+                return new ReaderSettings { Name = role, Hostname = hostname };
             }
-
-            // Either use the existing settings or convert if needed
             return settings[role];
         }
 
@@ -111,13 +115,22 @@ namespace OctaneTagJobControlAPI.Strategies.Base
         /// <param name="settings">The reader settings to modify</param>
         protected void EnableLowLatencyReporting(Settings settings)
         {
-            MSG_ADD_ROSPEC addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
-            MSG_SET_READER_CONFIG setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
-            setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
+            try
             {
-                ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
-            });
-            reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
+                MSG_ADD_ROSPEC addRoSpecMessage = reader.BuildAddROSpecMessage(settings);
+                MSG_SET_READER_CONFIG setReaderConfigMessage = reader.BuildSetReaderConfigMessage(settings);
+                setReaderConfigMessage.AddCustomParameter(new PARAM_ImpinjReportBufferConfiguration()
+                {
+                    ReportBufferMode = ENUM_ImpinjReportBufferMode.Low_Latency
+                });
+                reader.ApplySettings(setReaderConfigMessage, addRoSpecMessage);
+                LogDebug("Low latency reporting enabled for reader {Hostname}", hostname);
+            }
+            catch (Exception ex)
+            {
+                LogError(ex, "Error enabling low latency reporting for reader {Hostname}: {Message}", hostname, ex.Message);
+            }
+
         }
 
         /// <summary>
@@ -129,13 +142,14 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             {
                 if (reader != null)
                 {
+                    LogInformation("Stopping and disconnecting reader at {Hostname}", hostname);
                     reader.Stop();
                     reader.Disconnect();
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during reader cleanup: {ex.Message}");
+                LogError(ex, "Error during reader cleanup for {Hostname}: {Message}", hostname, ex.Message);
             }
         }
 
