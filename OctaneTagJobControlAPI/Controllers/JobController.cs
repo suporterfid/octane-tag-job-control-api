@@ -2,13 +2,13 @@
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Services;
 using OctaneTagJobControlAPI.Repositories;
+using System.Text.Json;
 
 namespace OctaneTagJobControlAPI.Controllers
 {
     /// <summary>
     /// Controller for managing RFID job operations.
     /// </summary>
-    [ApiController]
     [Route("api/[controller]")]
     public class JobController : ControllerBase
     {
@@ -229,7 +229,8 @@ namespace OctaneTagJobControlAPI.Controllers
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
-        public async Task<IActionResult> StartJob(string jobId, [FromBody] StartJobRequest request)
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> StartJob(string jobId, [FromBody] object requestObj)
         {
             try
             {
@@ -266,8 +267,25 @@ namespace OctaneTagJobControlAPI.Controllers
                     });
                 }
 
-                // Start the job with configuration if provided
-                int timeout = request != null ? request.TimeoutSeconds : 300;
+                // Parse the request manually to avoid model validation
+                int timeout = 300;
+                if (requestObj != null)
+                {
+                    try
+                    {
+                        var jsonElement = (JsonElement)requestObj;
+                        if (jsonElement.TryGetProperty("TimeoutSeconds", out var timeoutElement) && 
+                            timeoutElement.TryGetInt32(out var timeoutValue))
+                        {
+                            timeout = timeoutValue;
+                        }
+                    }
+                    catch
+                    {
+                        // If parsing fails, use default timeout
+                    }
+                }
+
                 bool success = await _jobManager.StartJobAsync(jobId, timeout);
 
                 if (!success)

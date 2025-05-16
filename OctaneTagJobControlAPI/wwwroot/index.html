@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFID Job Control Portal</title>
+    <!-- Local Alpine.js -->
+    <script defer src="/js/alpine.min.js"></script>
+    <!-- Local Tailwind CSS -->
+    <link rel="stylesheet" href="/css/tailwind.min.css">
+    <!-- Portal styles -->
+    <link rel="stylesheet" href="/css/main.css">
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+    <div class="container mx-auto px-4 py-8 flex-grow flex flex-col">
+        <header class="bg-blue-600 text-white p-6 rounded-lg shadow-md mb-8">
+            <h1 class="text-3xl font-bold">RFID Job Control Portal</h1>
+            <p class="text-lg mt-2">Select a strategy interface to manage RFID operations</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 flex-grow">
+            <!-- MultiReaderEnduranceStrategy Card -->
+            <a href="/multi/index.html" class="block bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-300">
+                <div class="bg-blue-500 h-3"></div>
+                <div class="p-6">
+                    <h2 class="text-xl font-semibold mb-2">MultiReader Endurance Strategy</h2>
+                    <p class="text-gray-600 mb-4">
+                        Configure and monitor endurance tests with multiple readers for detection, writing, and verification operations.
+                    </p>
+                    <div class="flex space-x-2 mt-4">
+                        <span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">Multiple Readers</span>
+                        <span class="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">Lock Support</span>
+                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">GPI/GPO</span>
+                    </div>
+                    <div class="mt-6 text-right">
+                        <span class="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg">Launch Interface</span>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Placeholder for future strategies -->
+            <div class="block bg-white rounded-lg shadow-md overflow-hidden opacity-50">
+                <div class="bg-gray-400 h-3"></div>
+                <div class="p-6">
+                    <h2 class="text-xl font-semibold mb-2">ReadOnly Strategy</h2>
+                    <p class="text-gray-600 mb-4">
+                        Coming soon: Configure and monitor read-only tag operations for inventory and monitoring.
+                    </p>
+                    <div class="flex space-x-2 mt-4">
+                        <span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full">Single Reader</span>
+                        <span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full">Read Only</span>
+                    </div>
+                    <div class="mt-6 text-right">
+                        <span class="inline-block bg-gray-400 cursor-not-allowed text-white px-4 py-2 rounded-lg">Coming Soon</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Placeholder for future strategies -->
+            <div class="block bg-white rounded-lg shadow-md overflow-hidden opacity-50">
+                <div class="bg-gray-400 h-3"></div>
+                <div class="p-6">
+                    <h2 class="text-xl font-semibold mb-2">CheckBox Strategy</h2>
+                    <p class="text-gray-600 mb-4">
+                        Coming soon: Configure and monitor verification and encoding with single-reader operations.
+                    </p>
+                    <div class="flex space-x-2 mt-4">
+                        <span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full">Single Reader</span>
+                        <span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full">Encoding</span>
+                    </div>
+                    <div class="mt-6 text-right">
+                        <span class="inline-block bg-gray-400 cursor-not-allowed text-white px-4 py-2 rounded-lg">Coming Soon</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-8 text-center text-gray-500 text-sm py-4">
+            <p>RFID Job Control API - © 2025 Your Organization</p>
+            <p class="mt-2">
+                <a href="/swagger" class="text-blue-600 hover:underline">API Documentation</a> | 
+                <a href="/api/status" class="text-blue-600 hover:underline">System Status</a>
+            </p>
+        </footer>
+    </div>
+</body>
+</html>

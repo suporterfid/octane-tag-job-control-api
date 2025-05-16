@@ -1,5 +1,4 @@
-using System.ComponentModel.DataAnnotations;
-
+#nullable enable
 namespace OctaneTagJobControlAPI.Models
 {
     /// <summary>
@@ -13,8 +12,9 @@ namespace OctaneTagJobControlAPI.Models
         public int TimeoutSeconds { get; set; } = 300;
 
         /// <summary>
-        /// Optional configuration ID to use for this job
+        /// Optional configuration ID to use for this job. If not provided, uses the job's existing configuration.
         /// </summary>
-        public string ConfigurationId { get; set; }
+        public string? ConfigurationId { get; set; } = null;
     }
 }
+#nullable restore

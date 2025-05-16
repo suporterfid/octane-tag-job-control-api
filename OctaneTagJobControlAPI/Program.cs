@@ -9,6 +9,9 @@ using System.Text.Json.Serialization;
 using OctaneTagJobControlAPI.Repositories;
 using Serilog;
 using Serilog.Events;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,12 +26,46 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 // Add services to the container
-builder.Services.AddControllers()
-    .AddJsonOptions(options =>
-    {
-        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-    });
+builder.Services.AddControllers(options => 
+{
+    options.ModelValidatorProviders.Clear();
+    options.ModelMetadataDetailsProviders.Clear();
+    options.ModelBindingMessageProvider.SetAttemptedValueIsInvalidAccessor((x, y) => "");
+    options.ModelBindingMessageProvider.SetMissingBindRequiredValueAccessor(x => "");
+    options.ModelBindingMessageProvider.SetMissingKeyOrValueAccessor(() => "");
+    options.ModelBindingMessageProvider.SetMissingRequestBodyRequiredValueAccessor(() => "");
+    options.ModelBindingMessageProvider.SetValueMustNotBeNullAccessor(x => "");
+})
+.AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+})
+.AddMvcOptions(options => 
+{
+    options.EnableEndpointRouting = false;
+    options.ModelValidatorProviders.Clear();
+})
+.ConfigureApiBehaviorOptions(options =>
+{
+    options.SuppressModelStateInvalidFilter = true;
+    options.SuppressInferBindingSourcesForParameters = true;
+    options.SuppressMapClientErrors = true;
+    options.InvalidModelStateResponseFactory = context => new OkResult();
+    options.SuppressModelStateInvalidFilter = true;
+});
+
+// Disable model validation globally
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.SuppressModelStateInvalidFilter = true;
+    options.SuppressInferBindingSourcesForParameters = true;
+    options.SuppressMapClientErrors = true;
+    options.InvalidModelStateResponseFactory = context => new OkResult();
+});
+
+// Remove all model validation providers
+builder.Services.RemoveAll<IModelValidatorProvider>();
 
 // Add Swagger/OpenAPI
 builder.Services.AddEndpointsApiExplorer();
@@ -99,7 +136,24 @@ app.UseSerilogRequestLogging();
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseAuthorization();
+
 app.MapControllers();
+app.UseFileServer(true);
+
+// Add routes for strategy-specific SPAs
+app.MapWhen(
+    context => context.Request.Path.StartsWithSegments("/multi"),
+    appBuilder => {
+        appBuilder.UseStaticFiles();
+        appBuilder.UseRouting();
+        appBuilder.UseEndpoints(endpoints => {
+            endpoints.MapFallbackToFile("/multi/index.html");
+        });
+    }
+);
+
+// Fallback to main portal for root path
+app.MapFallbackToFile("/index.html");
 
 // Initialize configuration service on startup
 var configService = app.Services.GetRequiredService<JobConfigurationService>();

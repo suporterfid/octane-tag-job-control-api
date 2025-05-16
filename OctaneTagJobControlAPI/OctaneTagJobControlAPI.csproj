@@ -13,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.StaticFiles" Version="2.3.0" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.0" />
 	  <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.0" />
 	  <PackageReference Include="Serilog" Version="4.2.0" />
@@ -32,6 +33,15 @@
   <ItemGroup>
     <ProjectReference Include="..\EpcListGenerator\EpcListGenerator.csproj" />
     <ProjectReference Include="..\TagUtils\TagUtils.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="wwwroot\multi\index.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Update="wwwroot\multi\js\app.js">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

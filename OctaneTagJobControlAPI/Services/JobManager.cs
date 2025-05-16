@@ -295,7 +295,33 @@ namespace OctaneTagJobControlAPI.Services
         {
             if (!_cancellationTokens.TryGetValue(jobId, out var cts))
             {
-                return false;
+                try
+                {
+                    var status = await _jobRepository.GetJobStatusAsync(jobId);
+                    if (status != null)
+                    {
+                        status.State = JobState.Canceled;
+                        status.EndTime = DateTime.UtcNow;
+                        status.CurrentOperation = "Canceled by user";
+
+                        await _jobRepository.UpdateJobStatusAsync(jobId, status);
+                        await _jobRepository.AddJobLogEntryAsync(jobId, "Job was canceled by user");
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                        _logger.LogWarning("Job {JobId} is not running or already stopped", jobId);
+                    }
+                        
+                }
+                catch (Exception)
+                {
+                    return false;
+                    _logger.LogWarning("Job {JobId} is not running or already stopped", jobId);
+
+                }
+                
             }
 
             try

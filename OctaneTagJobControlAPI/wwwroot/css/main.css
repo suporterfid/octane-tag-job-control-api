@@ -1,0 +1,12 @@
+/* Portal-specific styles */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.strategy-card {
+    transition: transform 0.2s;
+}
+
+.strategy-card:hover {
+    transform: translateY(-5px);
+}
