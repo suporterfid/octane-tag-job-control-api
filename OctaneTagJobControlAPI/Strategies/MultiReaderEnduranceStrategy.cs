@@ -879,6 +879,9 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (string.IsNullOrEmpty(tidHex) || TagOpController.Instance.IsTidProcessed(tidHex))
                     continue;
 
+                if (epcHex.Length < 24)
+                    continue;
+
                 Console.WriteLine($"Detector: New tag detected. TID: {tidHex}, Current EPC: {epcHex}");
 
                 // Generate a new EPC if one is not already recorded using the detector logic
@@ -931,6 +934,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (string.IsNullOrEmpty(tidHex) || TagOpController.Instance.IsTidProcessed(tidHex))
                     continue;
 
+                if (epcHex.Length < 24)
+                    continue;
                 cycleCount.TryAdd(tidHex, 0);
 
                 if (cycleCount[tidHex] >= MaxCycles)
@@ -994,6 +999,9 @@ namespace OctaneTagJobControlAPI.Strategies
                     continue;
 
                 var epcHex = tag.Epc?.ToHexString() ?? string.Empty;
+                if (epcHex.Length < 24)
+                    continue;
+
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
 
                 // If no expected EPC exists (this can happen in distributed mode)

@@ -77,6 +77,7 @@ namespace OctaneTagJobControlAPI.Strategies.Base
 
                 settings.Antennas.DisableAll();
                 settings.Antennas.GetAntenna((ushort)detectorSettings.AntennaPort).IsEnabled = true;
+                settings.Antennas.GetAntenna((ushort)detectorSettings.AntennaPort).MaxTxPower = false;
                 settings.Antennas.GetAntenna((ushort)detectorSettings.AntennaPort).TxPowerInDbm = detectorSettings.TxPowerInDbm;
                 settings.Antennas.GetAntenna((ushort)detectorSettings.AntennaPort).MaxRxSensitivity = detectorSettings.MaxRxSensitivity;
                 settings.Antennas.GetAntenna((ushort)detectorSettings.AntennaPort).RxSensitivityInDbm = detectorSettings.RxSensitivityInDbm;
@@ -131,10 +132,35 @@ namespace OctaneTagJobControlAPI.Strategies.Base
                 settings.RfMode = (uint)writerSettings.RfMode;
 
                 settings.Antennas.DisableAll();
-                settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).IsEnabled = true;
-                settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).TxPowerInDbm = writerSettings.TxPowerInDbm;
-                settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
-                settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+                //settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).IsEnabled = true;
+                //settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).TxPowerInDbm = writerSettings.TxPowerInDbm;
+                //settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
+                //settings.Antennas.GetAntenna((ushort)writerSettings.AntennaPort).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(1).IsEnabled = true;
+                settings.Antennas.GetAntenna(1).MaxTxPower = false;
+                settings.Antennas.GetAntenna(1).TxPowerInDbm = writerSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(1).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(1).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(2).IsEnabled = true;
+                settings.Antennas.GetAntenna(2).MaxTxPower = false;
+                settings.Antennas.GetAntenna(2).TxPowerInDbm = writerSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(2).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(2).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(3).IsEnabled = true;
+                settings.Antennas.GetAntenna(3).MaxTxPower = false;
+                settings.Antennas.GetAntenna(3).TxPowerInDbm = writerSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(3).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(3).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(4).IsEnabled = true;
+                settings.Antennas.GetAntenna(4).MaxTxPower = false;
+                settings.Antennas.GetAntenna(4).TxPowerInDbm = writerSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(4).MaxRxSensitivity = writerSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(4).RxSensitivityInDbm = writerSettings.RxSensitivityInDbm;
+
 
                 settings.SearchMode = (SearchMode)Enum.Parse(typeof(SearchMode), writerSettings.SearchMode);
                 settings.Session = (ushort)writerSettings.Session;
@@ -188,6 +214,27 @@ namespace OctaneTagJobControlAPI.Strategies.Base
                 settings.Antennas.GetAntenna((ushort)verifierSettings.AntennaPort).TxPowerInDbm = verifierSettings.TxPowerInDbm;
                 settings.Antennas.GetAntenna((ushort)verifierSettings.AntennaPort).MaxRxSensitivity = verifierSettings.MaxRxSensitivity;
                 settings.Antennas.GetAntenna((ushort)verifierSettings.AntennaPort).RxSensitivityInDbm = verifierSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(1).IsEnabled = true;
+                settings.Antennas.GetAntenna(1).TxPowerInDbm = verifierSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(1).MaxRxSensitivity = verifierSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(1).RxSensitivityInDbm = verifierSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(2).IsEnabled = true;
+                settings.Antennas.GetAntenna(2).TxPowerInDbm = verifierSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(2).MaxRxSensitivity = verifierSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(2).RxSensitivityInDbm = verifierSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(3).IsEnabled = true;
+                settings.Antennas.GetAntenna(3).TxPowerInDbm = verifierSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(3).MaxRxSensitivity = verifierSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(3).RxSensitivityInDbm = verifierSettings.RxSensitivityInDbm;
+
+                settings.Antennas.GetAntenna(4).IsEnabled = true;
+                settings.Antennas.GetAntenna(4).TxPowerInDbm = verifierSettings.TxPowerInDbm;
+                settings.Antennas.GetAntenna(4).MaxRxSensitivity = verifierSettings.MaxRxSensitivity;
+                settings.Antennas.GetAntenna(4).RxSensitivityInDbm = verifierSettings.RxSensitivityInDbm;
+
 
                 settings.SearchMode = (SearchMode)Enum.Parse(typeof(SearchMode), verifierSettings.SearchMode);
                 settings.Session = (ushort)verifierSettings.Session;

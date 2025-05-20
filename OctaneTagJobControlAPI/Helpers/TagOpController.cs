@@ -546,7 +546,7 @@ namespace OctaneTagWritingTest.Helpers
                     }
                     else
                     {
-                        nextEpc = EpcListManager.Instance.CreateEpcWithCurrentDigits(epc, tid);
+                        nextEpc = EpcListManager.Instance.CreateEpcWithCurrentDigits(epc, tid, _gtin ?? "99999999999999", companyPrefixLength, encodingMethod);
                     }
                     
 

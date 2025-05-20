@@ -46,41 +46,34 @@ public sealed class EpcListManager
     }
 
     /// <summary>
-    /// Creates a new EPC string using the configured header and item code for the first 14 digits
-    /// and taking the remaining 20 digits from the provided current EPC.
+    /// Creates a new EPC string using the provided parameters and encoding method.
     /// </summary>
-    /// <param name="currentEpc">The current EPC string to take the remaining digits from.</param>
+    /// <param name="currentEpc">The current EPC string (must be 24 characters).</param>
     /// <param name="tid">The TID string to associate with the new EPC.</param>
-    /// <returns>A new EPC string with the configured prefix and remaining digits from current EPC.</returns>
-    public string CreateEpcWithCurrentDigits(string currentEpc, string tid)
+    /// <param name="gtin">The GTIN to use for EPC generation.</param>
+    /// <param name="companyPrefixLength">Length of the company prefix (default is 6).</param>
+    /// <param name="encodingMethod">The EPC encoding method to use (default is BasicWithTidSuffix).</param>
+    /// <returns>A new EPC string generated according to the specified parameters.</returns>
+    public string CreateEpcWithCurrentDigits(string currentEpc, string tid, string gtin, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
     {
         if (string.IsNullOrEmpty(currentEpc) || currentEpc.Length != 24)
-            throw new ArgumentException("Current EPC must be a 24-character string.", nameof(currentEpc));
+        //    throw new ArgumentException("Current EPC must be a 24-character string.", nameof(currentEpc));
 
         if (string.IsNullOrEmpty(tid))
             throw new ArgumentException("TID cannot be null or empty.", nameof(tid));
 
+        if (string.IsNullOrEmpty(gtin))
+            throw new ArgumentException("GTIN cannot be null or empty.", nameof(gtin));
+
         lock (lockObj)
         {
-            // Take the first 14 digits from configured header and item code
-            string prefix = _epcHeader + _epcPlainItemCode;
-            if (prefix.Length != 14)
-                throw new InvalidOperationException("Combined header and item code must be 14 characters.");
-
-            // Take the remaining 10 digits from the current EPC
-            string remainingDigits = currentEpc.Substring(14);
-
-            // Take the last 10 digits from the TID
-            string tidSuffix = tid.Substring(14);
-            tidSuffix = tidSuffix.PadLeft(10, '0');
-
-            // Combine to create the new EPC
-            string newEpc = prefix + tidSuffix;
+            // Use the GenerateEpc method to create the EPC with all parameters
+            string newEpc = GenerateEpc(tid, gtin, companyPrefixLength, encodingMethod);
 
             // Store the new EPC in the dictionary associated with the TID
             generatedEpcsByTid.AddOrUpdate(tid, newEpc, (key, oldValue) => newEpc);
 
-            Console.WriteLine($"Created new EPC {newEpc} for TID {tid} using current EPC {currentEpc}");
+            Console.WriteLine($"Created new EPC {newEpc} for TID {tid} using GTIN {gtin} with encoding {encodingMethod}");
             return newEpc;
         }
     }
@@ -91,10 +84,15 @@ public sealed class EpcListManager
     /// </summary>
     /// <param name="currentEpc">The current EPC string to use for creating the new EPC.</param>
     /// <param name="tid">The TID string to associate with the new EPC.</param>
+    /// <param name="gtin">The GTIN to use for EPC generation (optional, uses _epcPlainItemCode if not provided).</param>
+    /// <param name="companyPrefixLength">Length of the company prefix (default is 6).</param>
+    /// <param name="encodingMethod">The EPC encoding method to use (default is BasicWithTidSuffix).</param>
     /// <returns>The first 14 digits of the newly created EPC.</returns>
-    public string CreateAndStoreNewEpcBasedOnCurrentPrefix(string currentEpc, string tid)
+    public string CreateAndStoreNewEpcBasedOnCurrentPrefix(string currentEpc, string tid, string gtin = null, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
     {
-        string newEpc = CreateEpcWithCurrentDigits(currentEpc, tid);
+        // If no GTIN provided, use the configured _epcPlainItemCode
+        gtin = gtin ?? _epcPlainItemCode;
+        string newEpc = CreateEpcWithCurrentDigits(currentEpc, tid, gtin, companyPrefixLength, encodingMethod);
         return newEpc.Substring(0, 14);
     }
 
@@ -125,11 +123,13 @@ public sealed class EpcListManager
     }
 
     /// <summary>
-    /// Initializes EPC data with the specified header, code, and quantity.
+    /// Initializes EPC data with the specified parameters for EPC generation.
     /// </summary>
     /// <param name="header">The EPC header.</param>
     /// <param name="code">The plain item code.</param>
     /// <param name="epcQuantity">The number of EPCs to generate (default is 1).</param>
+    /// <param name="companyPrefixLength">Length of the company prefix (default is 6).</param>
+    /// <param name="encodingMethod">The EPC encoding method to use (default is BasicWithTidSuffix).</param>
     public void InitEpcData(string header, string code, long epcQuantity = 1, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
     {
         _epcHeader = header;
@@ -162,6 +162,14 @@ public sealed class EpcListManager
         }
     }
 
+    /// <summary>
+    /// Generates an EPC string using the specified parameters and encoding method.
+    /// </summary>
+    /// <param name="tid">The TID string to use for EPC generation.</param>
+    /// <param name="gtin">The GTIN to use for EPC generation.</param>
+    /// <param name="companyPrefixLength">Length of the company prefix (default is 6).</param>
+    /// <param name="encodingMethod">The EPC encoding method to use (default is BasicWithTidSuffix).</param>
+    /// <returns>A new EPC string generated according to the specified parameters.</returns>
     public string GenerateEpc(string tid, string gtin, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
     {
         if (string.IsNullOrEmpty(_epcPlainItemCode))
@@ -169,58 +177,74 @@ public sealed class EpcListManager
             _epcPlainItemCode = gtin;
         }
 
+        // Ensure GTIN is 14 digits
+        if (gtin.Length < 14)
+        {
+            gtin = gtin.PadLeft(14, '0');
+        }
+        else if (gtin.Length > 14)
+        {
+            gtin = gtin.Substring(gtin.Length - 14);
+        }
+
         switch (encodingMethod)
         {
             case EpcEncodingMethod.SGTIN96:
                 try
                 {
-                    if (gtin.Length < 13)
-                    {
-                        gtin = gtin.PadLeft(13, '0');
-                    }
-
                     if (!gtin.Equals(_epcPlainItemCode, StringComparison.OrdinalIgnoreCase))
                     {
                         _epcPlainItemCode = gtin;
-                        var sgtin96 = Sgtin96.FromGTIN(gtin, companyPrefixLength);
-                        _baseEpcHex = sgtin96.ToEpc().Substring(0, 14);
+                        // Use the first 13 digits for SGTIN-96 encoding (excluding check digit)
+                        var sgtin96 = Sgtin96.FromGTIN(gtin.Substring(0, 13), companyPrefixLength);
+                        string fullEpc = sgtin96.ToEpc();
+                        
+                        // Take the last 10 digits from TID
+                        string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
+                        
+                        // Combine to form 24-character EPC
+                        string newEpc = fullEpc.Substring(0, 14) + tidSuffix;
+                        
+                        Console.WriteLine($"Generated SGTIN-96 EPC for TID {tid} using GTIN {gtin}: {newEpc}");
+                        return newEpc;
                     }
-
-
-                    string serialStr = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid;
-
-                    //if (ulong.TryParse(serialStr, System.Globalization.NumberStyles.HexNumber, null, out ulong serialNumber))
-                    //{
-                    //    serialNumber = Math.Min(serialNumber, 274877906943);
-                    //}
-                    //else
-                    //{
-                    //    serialNumber = (ulong)Math.Abs(tid.GetHashCode()) % 274877906943;
-                    //}
-
-                    //sgtin96.SerialNumber = serialNumber;
-                    //string newEpc = sgtin96.ToEpc();
-                    string newEpc = GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
-
-                    Console.WriteLine($"Generated SGTIN-96 EPC for TID {tid}: {newEpc}");
-                    return newEpc;
+                    else
+                    {
+                        // Use existing base EPC if GTIN hasn't changed
+                        string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
+                        string newEpc = _baseEpcHex + tidSuffix;
+                        Console.WriteLine($"Generated SGTIN-96 EPC for TID {tid} using cached base: {newEpc}");
+                        return newEpc;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error generating SGTIN-96 EPC: {ex.Message}. Falling back to basic encoding.");
-                    return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+                    Console.WriteLine($"Error generating SGTIN-96 EPC: {ex.Message}. Using direct GTIN + TID encoding.");
+                    // Direct encoding: Convert GTIN to hex and append TID suffix
+                    string gtinHex = Convert.ToInt64(gtin).ToString("X14");
+                    string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
+                    string newEpc = gtinHex + tidSuffix;
+                    return newEpc;
                 }
 
             case EpcEncodingMethod.CustomFormat:
-                Console.WriteLine("CustomFormat encoding not yet implemented, falling back to basic encoding.");
-                return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
-
             case EpcEncodingMethod.BasicWithTidSuffix:
             default:
-                return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+                // Direct encoding: Convert GTIN to hex and append TID suffix
+                string baseHex = Convert.ToInt64(gtin).ToString("X14");
+                string suffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
+                string epc = baseHex + suffix;
+                Console.WriteLine($"Generated basic EPC for TID {tid} using GTIN {gtin}: {epc}");
+                return epc;
         }
     }
 
+    /// <summary>
+    /// Generates a basic EPC by appending a TID suffix to a partial hex EPC.
+    /// </summary>
+    /// <param name="partialHexEpc">The partial hex EPC to use as a prefix.</param>
+    /// <param name="tid">The TID string to use for the suffix (takes last 10 characters or pads if shorter).</param>
+    /// <returns>A complete EPC string with the TID suffix.</returns>
     public string GenerateBasicEpcWithTidSuffix(string partialHexEpc, string tid)
     {
         string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
@@ -238,17 +262,12 @@ public sealed class EpcListManager
     {
         lock (lockObj)
         {
-            // Generate the EPC list using the current serial number.
-            string createdEpcToApply =  GenerateEpc(tid, _epcPlainItemCode, _companyPrefixLength, _encodingMethod);
-            //string createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
-            //    tid, _epcHeader, _epcPlainItemCode);
+            string createdEpcToApply = GenerateEpc(tid, _epcPlainItemCode, _companyPrefixLength, _encodingMethod);
 
             // If the generated EPC already exists, generate a new EPC with the next serial number.
             if (TagOpController.Instance.GetExistingEpc(createdEpcToApply))
             {
                 createdEpcToApply = GenerateEpc(tid, _epcPlainItemCode, _companyPrefixLength, _encodingMethod);
-                //createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
-                //    tid, _epcHeader, _epcPlainItemCode);
             }
 
             Console.WriteLine($"Returning next EPC created: {createdEpcToApply}: SN = {currentSerialNumber}");

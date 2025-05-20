@@ -9,7 +9,6 @@ using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Services;
 
-
 namespace OctaneTagJobControlAPI.Strategies
 {
     /// <summary>
@@ -33,7 +32,6 @@ namespace OctaneTagJobControlAPI.Strategies
             _logger = logger;
             _serviceProvider = serviceProvider;
             _strategyTypes = DiscoverStrategyTypes();
-
         }
 
         /// <summary>
@@ -112,44 +110,81 @@ namespace OctaneTagJobControlAPI.Strategies
         /// </summary>
         private IJobStrategy CreateMultiReaderStrategy(Type strategyType, StrategyConfiguration config, object logger)
         {
-            if (!(config is EnduranceTestConfiguration enduranceTestConfig))
+            // First, validate the configuration type
+            if (!(config is WriteStrategyConfiguration writeConfig))
             {
-                throw new ArgumentException("CreateMultiReaderStrategy requires EncodingStrategyConfiguration");
+                throw new ArgumentException("MultiReaderStrategy requires WriteStrategyConfiguration or derived type");
             }
 
-            // Handle the case where logger may be null
+            // Get the appropriate configuration type
+            bool isEnduranceTest = config is EnduranceTestConfiguration;
+            bool isEncodingTest = config is EncodingStrategyConfiguration;
+
+            // Extract the parameters we need
+            string detectorHostname = config.ReaderSettings.Detector?.Hostname;
+            string writerHostname = config.ReaderSettings.Writer?.Hostname;
+            string verifierHostname = config.ReaderSettings.Verifier?.Hostname;
+            var readerSettings = ConvertReaderSettings(config.ReaderSettings);
+
+            // Extract encoding parameters if available
+            string epcHeader = "E7"; // Default value
+            string sku = null;
+            string encodingMethod = "BasicWithTidSuffix";
+            int companyPrefixLength = 6;
+            int itemReference = 0;
+
+            if (isEnduranceTest)
+            {
+                var enduranceConfig = (EnduranceTestConfiguration)config;
+                epcHeader = enduranceConfig.EpcHeader;
+                sku = enduranceConfig.Sku;
+                encodingMethod = enduranceConfig.EncodingMethod;
+                companyPrefixLength = enduranceConfig.CompanyPrefixLength;
+                itemReference = enduranceConfig.ItemReference;
+            }
+            else if (isEncodingTest)
+            {
+                var encodingConfig = (EncodingStrategyConfiguration)config;
+                epcHeader = encodingConfig.EpcHeader;
+                sku = encodingConfig.Sku;
+                encodingMethod = encodingConfig.EncodingMethod;
+                companyPrefixLength = encodingConfig.CompanyPrefixLength;
+                itemReference = encodingConfig.PartitionValue;
+            }
+
+            // Create the instance with correct parameters
             if (logger == null)
             {
                 return (IJobStrategy)Activator.CreateInstance(
                     strategyType,
-                    enduranceTestConfig.ReaderSettings.Detector?.Hostname,
-                    enduranceTestConfig.ReaderSettings.Writer?.Hostname,
-                    enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
-                    enduranceTestConfig.LogFilePath,
-                    ConvertReaderSettings(config.ReaderSettings),
-                    enduranceTestConfig.EpcHeader,
-                    enduranceTestConfig.Sku,
-                    enduranceTestConfig.EncodingMethod,
-                    enduranceTestConfig.CompanyPrefixLength,
-                    enduranceTestConfig.ItemReference,
+                    detectorHostname,
+                    writerHostname,
+                    verifierHostname,
+                    config.LogFilePath,
+                    readerSettings,
+                    epcHeader,
+                    sku,
+                    encodingMethod,
+                    companyPrefixLength,
+                    itemReference,
                     _serviceProvider);
             }
-
-            // Include logger in the constructor parameters
-            return (IJobStrategy)Activator.CreateInstance(
-                strategyType,
-                enduranceTestConfig.ReaderSettings.Detector?.Hostname,
-                enduranceTestConfig.ReaderSettings.Writer?.Hostname,
-                enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
-                enduranceTestConfig.LogFilePath,
-                ConvertReaderSettings(config.ReaderSettings),
-                enduranceTestConfig.EpcHeader,
-                enduranceTestConfig.Sku,
-                enduranceTestConfig.EncodingMethod,
-                enduranceTestConfig.CompanyPrefixLength,
-                enduranceTestConfig.ItemReference,
-                _serviceProvider,
-                logger);
+            else
+            {
+                return (IJobStrategy)Activator.CreateInstance(
+                    strategyType,
+                    detectorHostname,
+                    writerHostname,
+                    verifierHostname,
+                    config.LogFilePath,
+                    readerSettings,
+                    epcHeader,
+                    sku,
+                    encodingMethod,
+                    companyPrefixLength,
+                    itemReference,
+                    _serviceProvider);
+            }
         }
 
         /// <summary>
