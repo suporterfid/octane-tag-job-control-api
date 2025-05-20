@@ -209,23 +209,6 @@ namespace OctaneTagWritingTest.Helpers
             RecordTagRead();
         }
 
-        /// <summary>
-        /// Overrides the HandleVerifiedTag method to also record timing metrics
-        /// </summary>
-        public void HandleVerifiedTagWithMetrics(Tag tag, string tidHex, string expectedEpc,
-            Stopwatch swWrite, Stopwatch swVerify, ConcurrentDictionary<string, int> cycleCount,
-            Tag currentTargetTag, string chipModel, string logFile)
-        {
-            // Call the original method
-            HandleVerifiedTag(tag, tidHex, expectedEpc, swWrite, swVerify,
-                cycleCount, currentTargetTag, chipModel, logFile);
 
-            // Record timing metrics
-            RecordWriteTime(tidHex, swWrite.ElapsedMilliseconds);
-            RecordVerifyTime(tidHex, swVerify.ElapsedMilliseconds);
-
-            // Record tag read for read rate calculation
-            RecordTagRead();
-        }
     }
 }

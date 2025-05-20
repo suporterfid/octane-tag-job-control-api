@@ -1069,5 +1069,33 @@ namespace OctaneTagWritingTest.Helpers
                 RecordResult(tidHex, resultStatus, resultStatus == "Success");
             }
         }
+
+        /// <summary>
+        /// Versão estendida do TriggerWriteAndVerify que também registra métricas
+        /// </summary>
+        public void TriggerWriteAndVerifyWithMetrics(Tag tag, string newEpcToWrite, ImpinjReader reader, CancellationToken cancellationToken, Stopwatch swWrite, string newAccessPassword, bool encodeOrDefault, ushort targetAntennaPort = 1, bool selfVerify = true, ushort sequenceMaxRetries = 5)
+        {
+            // Chamar o método original
+            TriggerWriteAndVerify(tag, newEpcToWrite, reader, cancellationToken, swWrite, newAccessPassword, encodeOrDefault, targetAntennaPort, true, sequenceMaxRetries);
+
+            // Registrar leitura de tag para cálculo de taxa de leitura
+            RecordTagRead();
+        }
+
+        /// <summary>
+        /// Versão estendida do HandleVerifiedTag que também registra métricas
+        /// </summary>
+        public void HandleVerifiedTagWithMetrics(Tag tag, string tidHex, string expectedEpc, Stopwatch swWrite, Stopwatch swVerify, ConcurrentDictionary<string, int> cycleCount, Tag currentTargetTag, string chipModel, string logFile)
+        {
+            // Chamar o método original
+            HandleVerifiedTag(tag, tidHex, expectedEpc, swWrite, swVerify, cycleCount, currentTargetTag, chipModel, logFile);
+
+            // Registrar os tempos para métricas
+            RecordWriteTime(tidHex, swWrite.ElapsedMilliseconds);
+            RecordVerifyTime(tidHex, swVerify.ElapsedMilliseconds);
+
+            // Registrar leitura de tag para cálculo de taxa de leitura
+            RecordTagRead();
+        }
     }
 }

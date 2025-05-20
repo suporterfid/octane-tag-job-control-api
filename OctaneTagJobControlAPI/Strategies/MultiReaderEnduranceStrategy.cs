@@ -197,7 +197,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 status.CurrentOperation = "Starting";
                 runTimer.Start();
 
-                // Log which reader roles are active
+                // Registrar quais papéis de leitor estão ativos
                 string activeRoles = "";
                 if (hasDetectorRole) activeRoles += "Detector ";
                 if (hasWriterRole) activeRoles += "Writer ";
@@ -206,10 +206,10 @@ namespace OctaneTagJobControlAPI.Strategies
                 Console.WriteLine($"=== Multiple Reader Endurance Test (Active Roles: {activeRoles.Trim()}) ===");
                 Console.WriteLine("Press 'q' to stop the test and return to menu.");
 
-                // Extract configuration settings from parameters
+                // Extrair configurações de parâmetros
                 ExtractConfigurationSettings();
 
-                // Configure only the available readers
+                // Configurar apenas os leitores disponíveis
                 try
                 {
                     if (hasDetectorRole)
@@ -237,87 +237,23 @@ namespace OctaneTagJobControlAPI.Strategies
                     throw;
                 }
 
-                // Register event handlers only for available readers
-                if (hasDetectorRole)
-                {
-                    detectorReader.TagsReported += OnTagsReportedDetector;
+                // Registrar manipuladores de eventos apenas para leitores disponíveis
+                RegisterEventHandlers();
 
-                    if (enableGpiTrigger &&
-                        settings.TryGetValue("detector", out var detectorSettings) &&
-                        detectorSettings.Parameters != null &&
-                        detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dGpiStr) &&
-                        bool.TryParse(dGpiStr, out bool dGpiEnabled) &&
-                        dGpiEnabled)
-                    {
-                        detectorReader.GpiChanged += OnGpiChanged;
-                        Console.WriteLine($"GPI trigger enabled on detector reader");
-                    }
-                }
-
-                if (hasWriterRole)
-                {
-                    writerReader.TagsReported += OnTagsReportedWriter;
-                    writerReader.TagOpComplete += OnTagOpComplete;
-
-                    if (enableGpiTrigger &&
-                        settings.TryGetValue("writer", out var writerSettings) &&
-                        writerSettings.Parameters != null &&
-                        writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wGpiStr) &&
-                        bool.TryParse(wGpiStr, out bool wGpiEnabled) &&
-                        wGpiEnabled)
-                    {
-                        writerReader.GpiChanged += OnGpiChanged;
-                        Console.WriteLine($"GPI trigger enabled on writer reader");
-                    }
-                }
-
-                if (hasVerifierRole)
-                {
-                    verifierReader.TagsReported += OnTagsReportedVerifier;
-                    verifierReader.TagOpComplete += OnTagOpComplete;
-
-                    if (enableGpiTrigger &&
-                        settings.TryGetValue("verifier", out var verifierSettings) &&
-                        verifierSettings.Parameters != null &&
-                        verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vGpiStr) &&
-                        bool.TryParse(vGpiStr, out bool vGpiEnabled) &&
-                        vGpiEnabled)
-                    {
-                        verifierReader.GpiChanged += OnGpiChanged;
-                        Console.WriteLine($"GPI trigger enabled on verifier reader");
-                    }
-                }
-
-                // Start the available readers
-                if (hasDetectorRole)
-                {
-                    detectorReader.Start();
-                    Console.WriteLine("Started detector reader");
-                }
-
-                if (hasWriterRole)
-                {
-                    writerReader.Start();
-                    Console.WriteLine("Started writer reader");
-                }
-
-                if (hasVerifierRole)
-                {
-                    verifierReader.Start();
-                    Console.WriteLine("Started verifier reader");
-                }
-
-                // Update status
-                status.CurrentOperation = "Running";
-
-                // Create CSV header if needed
+                // Criar cabeçalho CSV se necessário
                 if (!File.Exists(logFile))
                 {
-                    // Update header to include GPI/GPO status and reader role info
+                    // Atualizar cabeçalho para incluir status GPI/GPO e informações de papel do leitor
                     LogToCsv("Timestamp,TID,Previous_EPC,Expected_EPC,Verified_EPC,WriteTime_ms,VerifyTime_ms,Result,LockStatus,LockTime_ms,CycleCount,RSSI,AntennaPort,GpiTriggered,VerificationTimeMs,ReaderRole");
                 }
 
-                // Initialize success count timer
+                // Iniciar os leitores disponíveis
+                StartAvailableReaders();
+
+                // Atualizar status
+                status.CurrentOperation = "Running";
+
+                // Inicializar timer de contagem de sucesso
                 successCountTimer = new Timer(LogSuccessCount, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
 
                 while (!cancellationToken.IsCancellationRequested)
@@ -325,7 +261,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     Thread.Sleep(100);
                     status.RunTime = runTimer.Elapsed;
 
-                    // Check for GPI events that timed out without tag detection
+                    // Verificar eventos GPI que expiraram sem detecção de tag
                     if (enableGpiTrigger)
                     {
                         CheckGpiTimeouts();
@@ -345,6 +281,82 @@ namespace OctaneTagJobControlAPI.Strategies
                 runTimer.Stop();
                 successCountTimer?.Dispose();
                 CleanupReaders();
+            }
+        }
+
+        // Método auxiliar para registrar manipuladores de eventos
+        private void RegisterEventHandlers()
+        {
+            if (hasDetectorRole)
+            {
+                detectorReader.TagsReported += OnTagsReportedDetector;
+
+                if (enableGpiTrigger &&
+                    settings.TryGetValue("detector", out var detectorSettings) &&
+                    detectorSettings.Parameters != null &&
+                    detectorSettings.Parameters.TryGetValue("enableGpiTrigger", out var dGpiStr) &&
+                    bool.TryParse(dGpiStr, out bool dGpiEnabled) &&
+                    dGpiEnabled)
+                {
+                    detectorReader.GpiChanged += OnGpiChanged;
+                    Console.WriteLine($"GPI trigger enabled on detector reader");
+                }
+            }
+
+            if (hasWriterRole)
+            {
+                writerReader.TagsReported += OnTagsReportedWriter;
+                writerReader.TagOpComplete += OnTagOpComplete;
+
+                if (enableGpiTrigger &&
+                    settings.TryGetValue("writer", out var writerSettings) &&
+                    writerSettings.Parameters != null &&
+                    writerSettings.Parameters.TryGetValue("enableGpiTrigger", out var wGpiStr) &&
+                    bool.TryParse(wGpiStr, out bool wGpiEnabled) &&
+                    wGpiEnabled)
+                {
+                    writerReader.GpiChanged += OnGpiChanged;
+                    Console.WriteLine($"GPI trigger enabled on writer reader");
+                }
+            }
+
+            if (hasVerifierRole)
+            {
+                verifierReader.TagsReported += OnTagsReportedVerifier;
+                verifierReader.TagOpComplete += OnTagOpComplete;
+
+                if (enableGpiTrigger &&
+                    settings.TryGetValue("verifier", out var verifierSettings) &&
+                    verifierSettings.Parameters != null &&
+                    verifierSettings.Parameters.TryGetValue("enableGpiTrigger", out var vGpiStr) &&
+                    bool.TryParse(vGpiStr, out bool vGpiEnabled) &&
+                    vGpiEnabled)
+                {
+                    verifierReader.GpiChanged += OnGpiChanged;
+                    Console.WriteLine($"GPI trigger enabled on verifier reader");
+                }
+            }
+        }
+
+        // Método auxiliar para iniciar leitores disponíveis
+        private void StartAvailableReaders()
+        {
+            if (hasDetectorRole)
+            {
+                detectorReader.Start();
+                Console.WriteLine("Started detector reader");
+            }
+
+            if (hasWriterRole)
+            {
+                writerReader.Start();
+                Console.WriteLine("Started writer reader");
+            }
+
+            if (hasVerifierRole)
+            {
+                verifierReader.Start();
+                Console.WriteLine("Started verifier reader");
             }
         }
 
@@ -802,6 +814,7 @@ namespace OctaneTagJobControlAPI.Strategies
         }
 
         // Check for GPI events that have timed out without verification
+        // Método para verificar timeouts de eventos GPI
         private void CheckGpiTimeouts()
         {
             if (!enableGpiTrigger) return;
@@ -811,18 +824,18 @@ namespace OctaneTagJobControlAPI.Strategies
                 long eventId = entry.Key;
                 Stopwatch timer = entry.Value;
 
-                // Skip events that have been verified
+                // Pular eventos que foram verificados
                 if (gpiEventVerified.TryGetValue(eventId, out bool verified) && verified)
                     continue;
 
-                // Get reader and role information for this event
+                // Obter informações do leitor e papel para este evento
                 gpiEventReaders.TryGetValue(eventId, out ImpinjReader reader);
                 gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
 
-                // Get reader-specific timeout
+                // Obter o valor de timeout específico do leitor
                 int timeoutMs = gpoVerificationTimeoutMs;
 
-                // Get the timeout value from the specific reader settings if available
+                // Obter o valor de timeout das configurações específicas do leitor, se disponível
                 if (!string.IsNullOrEmpty(readerRole) && settings.TryGetValue(readerRole, out var readerSettings) &&
                     readerSettings.Parameters != null &&
                     readerSettings.Parameters.TryGetValue("gpoVerificationTimeoutMs", out var timeoutStr))
@@ -830,15 +843,15 @@ namespace OctaneTagJobControlAPI.Strategies
                     timeoutMs = ushort.TryParse(timeoutStr, out ushort timeout) ? timeout : timeoutMs;
                 }
 
-                // Check if timeout exceeded
+                // Verificar se o timeout foi excedido
                 if (timer.ElapsedMilliseconds > timeoutMs)
                 {
                     Console.WriteLine($"!!! GPI event {eventId} on {readerRole} reader timed out after {timer.ElapsedMilliseconds}ms without tag detection !!!");
 
-                    // Log the error with reader role
+                    // Registar o erro com o papel do leitor
                     LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},N/A,N/A,N/A,N/A,0,0,Missing_Tag_{readerRole},None,0,0,0,0,True,{timer.ElapsedMilliseconds},{readerRole}");
 
-                    // Trigger error GPO output if enabled and we have a valid reader
+                    // Acionar saída de GPO de erro se habilitada e temos um leitor válido
                     if (gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled) &&
                         gpoEnabled &&
                         reader != null &&
@@ -846,8 +859,21 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         try
                         {
-                            // Set the output to indicate error (toggle)
+                            // Definir a saída para indicar erro (alternar)
                             reader.SetGpo(gpoPort, true);
+
+                            // Programar reset de GPO após 500ms
+                            new Timer(state => {
+                                try
+                                {
+                                    if (reader != null)
+                                    {
+                                        reader.SetGpo(gpoPort, false);
+                                    }
+                                }
+                                catch (Exception) { /* Ignorar erros de timer */ }
+                            }, null, 500, Timeout.Infinite);
+
                             Console.WriteLine($"GPO {gpoPort} error signal sent (toggled) on {readerRole} reader");
                         }
                         catch (Exception ex)
@@ -856,17 +882,98 @@ namespace OctaneTagJobControlAPI.Strategies
                         }
                     }
 
-                    // Remove from tracking
+                    // Remover do rastreamento
                     gpiEventTimers.TryRemove(eventId, out _);
                     gpiEventVerified.TryRemove(eventId, out _);
                     gpiEventReaders.TryRemove(eventId, out _);
                     gpiEventReaderRoles.TryRemove(eventId, out _);
                     gpiEventGpoEnabled.TryRemove(eventId, out _);
                     gpiEventGpoPorts.TryRemove(eventId, out _);
+
+                    // Atualizar métricas
+                    lock (status)
+                    {
+                        status.Metrics["GpiEventsMissingTag"] = (int)status.Metrics.GetValueOrDefault("GpiEventsMissingTag", 0) + 1;
+                    }
                 }
             }
         }
 
+        // Método para registrar contagens de sucesso em intervalos regulares
+        private void LogSuccessCount(object state)
+        {
+            try
+            {
+                int successCount = TagOpController.Instance.GetSuccessCount();
+                int totalReadCount = TagOpController.Instance.GetTotalReadCount();
+                int lockedCount = lockedTags.Count;
+                int gpiEventsTotal = (int)lastGpiEventId;
+                int gpiEventsVerified = gpiEventVerified.Count(kv => kv.Value);
+                int gpiEventsPending = gpiEventTimers.Count;
+
+                string activeRoles = "";
+                if (hasDetectorRole) activeRoles += "Detector ";
+                if (hasWriterRole) activeRoles += "Writer ";
+                if (hasVerifierRole) activeRoles += "Verifier ";
+
+                double avgWriteTimeMs = swWriteTimers.Count > 0 ? swWriteTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0;
+                double avgVerifyTimeMs = swVerifyTimers.Count > 0 ? swVerifyTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0;
+                double avgLockTimeMs = swLockTimers.Count > 0 ? swLockTimers.Values.Average(sw => sw.ElapsedMilliseconds) : 0;
+                double readRate = TagOpController.Instance.GetReadRate();
+
+                lock (status)
+                {
+                    status.TotalTagsProcessed = totalReadCount;
+                    status.SuccessCount = successCount;
+                    status.FailureCount = totalReadCount - successCount;
+                    status.ProgressPercentage = totalReadCount > 0
+                        ? Math.Min(100, (double)successCount / totalReadCount * 100)
+                        : 0;
+
+                    // Adicionar status de bloqueio e GPI às métricas
+                    status.Metrics["LockedTags"] = lockedCount;
+                    status.Metrics["LockEnabled"] = enableLock;
+                    status.Metrics["PermalockEnabled"] = enablePermalock;
+                    status.Metrics["GpiEventsTotal"] = gpiEventsTotal;
+                    status.Metrics["GpiEventsVerified"] = gpiEventsVerified;
+                    status.Metrics["GpiEventsMissingTag"] = gpiEventsTotal - gpiEventsVerified;
+                    status.Metrics["GpiEventsPending"] = gpiEventsPending;
+                    status.Metrics["ActiveRoles"] = activeRoles.Trim();
+                    status.Metrics["AvgWriteTimeMs"] = avgWriteTimeMs;
+                    status.Metrics["AvgVerifyTimeMs"] = avgVerifyTimeMs;
+                    status.Metrics["AvgLockTimeMs"] = avgLockTimeMs;
+                    status.Metrics["ReadRate"] = readRate;
+                    status.Metrics["ElapsedSeconds"] = runTimer.Elapsed.TotalSeconds;
+
+                    // Atualizar métricas específicas do leitor
+                    if (readerMetrics.TryGetValue("writer", out var writerMetrics))
+                    {
+                        writerMetrics.AvgWriteTimeMs = avgWriteTimeMs;
+                        writerMetrics.ReadRate = readRate;
+                        writerMetrics.SuccessCount = successCount;
+                        writerMetrics.FailureCount = totalReadCount - successCount;
+                        writerMetrics.LockedTags = lockedCount;
+                    }
+
+                    if (readerMetrics.TryGetValue("verifier", out var verifierMetrics))
+                    {
+                        verifierMetrics.AvgVerifyTimeMs = avgVerifyTimeMs;
+                        verifierMetrics.ReadRate = readRate;
+                        verifierMetrics.SuccessCount = successCount;
+                        verifierMetrics.FailureCount = totalReadCount - successCount;
+                    }
+                }
+
+                Console.WriteLine($"[{activeRoles.Trim()}] Total Read [{totalReadCount}] Success count: [{successCount}] Locked/Permalocked: [{lockedCount}] GPI Events: {gpiEventsTotal} (Verified: {gpiEventsVerified}, Missing: {gpiEventsTotal - gpiEventsVerified}, Pending: {gpiEventsPending})");
+            }
+            catch (Exception ex)
+            {
+                // Ignorar exceções de timer
+                Console.WriteLine($"Error in LogSuccessCount: {ex.Message}");
+            }
+        }
+
+        // Em OnTagsReportedDetector
         private void OnTagsReportedDetector(ImpinjReader sender, TagReport report)
         {
             if (!hasDetectorRole || report == null || IsCancellationRequested())
@@ -876,6 +983,8 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 var tidHex = tag.Tid?.ToHexString() ?? string.Empty;
                 var epcHex = tag.Epc?.ToHexString() ?? string.Empty;
+
+                // Verificar se o TID já foi processado
                 if (string.IsNullOrEmpty(tidHex) || TagOpController.Instance.IsTidProcessed(tidHex))
                     continue;
 
@@ -884,21 +993,22 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 Console.WriteLine($"Detector: New tag detected. TID: {tidHex}, Current EPC: {epcHex}");
 
-                // Generate a new EPC if one is not already recorded using the detector logic
+                // Gerar um novo EPC se não existir um já registrado
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
                 if (string.IsNullOrEmpty(expectedEpc))
-                {            
+                {
                     expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Detector: Assigned new EPC for TID {tidHex}: {expectedEpc}");
 
-                    // Log the tag detection
+                    // Log a detecção da tag
                     LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedNewTag,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,detector");
 
-                    // If we also have the writer role, trigger the write operation locally
+                    // Se também temos o papel de writer, acionamos a operação de gravação localmente
                     if (hasWriterRole)
                     {
-                        TagOpController.Instance.TriggerWriteAndVerify(
+                        // Usar TriggerWriteAndVerifyWithMetrics para garantir que as métricas sejam atualizadas
+                        TagOpController.Instance.TriggerWriteAndVerifyWithMetrics(
                             tag,
                             expectedEpc,
                             writerReader,
@@ -906,11 +1016,9 @@ namespace OctaneTagJobControlAPI.Strategies
                             swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
                             newAccessPassword,
                             true,
-                            1,
-                            true,
-                            0);
+                            1);
                     }
-                    // Otherwise, just record the detection for distributed processing
+                    // Caso contrário, apenas registramos a detecção para processamento distribuído
                     else
                     {
                         TagOpController.Instance.RecordTagSeen(tidHex, epcHex, expectedEpc, TagOpController.Instance.GetChipModelName(tag));
@@ -922,6 +1030,7 @@ namespace OctaneTagJobControlAPI.Strategies
         /// <summary>
         /// Event handler for tag reports from the writer reader
         /// </summary>
+        // Em OnTagsReportedWriter
         private void OnTagsReportedWriter(ImpinjReader sender, TagReport report)
         {
             if (!hasWriterRole || report == null || IsCancellationRequested())
@@ -931,11 +1040,15 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 var tidHex = tag.Tid?.ToHexString() ?? string.Empty;
                 var epcHex = tag.Epc?.ToHexString() ?? string.Empty;
+
+                // Verificar se o TID já foi processado completamente
                 if (string.IsNullOrEmpty(tidHex) || TagOpController.Instance.IsTidProcessed(tidHex))
                     continue;
 
                 if (epcHex.Length < 24)
                     continue;
+
+                // Inicializar contador de ciclos
                 cycleCount.TryAdd(tidHex, 0);
 
                 if (cycleCount[tidHex] >= MaxCycles)
@@ -946,7 +1059,7 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
 
-                // If no expected EPC exists, generate one using the writer logic
+                // Se não existir um EPC esperado, geramos um usando a lógica do writer
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
                     Console.WriteLine($"Writer: New target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
@@ -954,14 +1067,15 @@ namespace OctaneTagJobControlAPI.Strategies
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Writer: New tag found. TID: {tidHex}. Assigning new EPC: {epcHex} -> {expectedEpc}");
 
-                    // Log the tag detection by the writer role
+                    // Log da detecção pela função de writer
                     LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedNewTagByWriter,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,writer");
                 }
 
+                // Se o EPC atual for diferente do esperado, fazemos a gravação
                 if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
                 {
-                    // Trigger the write operation using the writer reader
-                    TagOpController.Instance.TriggerWriteAndVerify(
+                    // Usar TriggerWriteAndVerifyWithMetrics para capturar métricas
+                    TagOpController.Instance.TriggerWriteAndVerifyWithMetrics(
                         tag,
                         expectedEpc,
                         sender,
@@ -970,15 +1084,24 @@ namespace OctaneTagJobControlAPI.Strategies
                         newAccessPassword,
                         true,
                         1,
-                        hasVerifierRole ? false : true, // Only self-verify if no verifier role available
+                        hasVerifierRole ? false : true, // Só auto-verificamos se não há papel de verificador
                         3);
                 }
                 else
                 {
+                    // Se o EPC já está correto, registramos como verificado
                     if (expectedEpc != null && expectedEpc.Equals(epcHex, StringComparison.OrdinalIgnoreCase))
                     {
-                        TagOpController.Instance.HandleVerifiedTag(tag, tidHex, expectedEpc, swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()), swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()), cycleCount, tag, TagOpController.Instance.GetChipModelName(tag), logFile);
-                        continue;
+                        TagOpController.Instance.HandleVerifiedTagWithMetrics(
+                            tag,
+                            tidHex,
+                            expectedEpc,
+                            swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                            swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                            cycleCount,
+                            tag,
+                            TagOpController.Instance.GetChipModelName(tag),
+                            logFile);
                     }
                 }
             }
@@ -987,6 +1110,8 @@ namespace OctaneTagJobControlAPI.Strategies
         /// <summary>
         /// Event handler for tag reports from the verifier reader
         /// </summary>
+        // Em OnTagsReportedWriter
+        // Em OnTagsReportedVerifier
         private void OnTagsReportedVerifier(ImpinjReader sender, TagReport report)
         {
             if (!hasVerifierRole || report == null || IsCancellationRequested())
@@ -1004,16 +1129,16 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
 
-                // If no expected EPC exists (this can happen in distributed mode)
+                // Se não existe EPC esperado (pode acontecer no modo distribuído)
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
-                    // When operating as verifier only, we might see tags that detector/writer processed
-                    // We'll use a fallback approach to handle this case
+                    // Quando operando apenas como verificador, podemos ver tags processadas pelo detector/writer
+                    // Usamos uma abordagem alternativa para lidar com este caso
                     expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Verifier (fallback detection): TID {tidHex}. Current EPC: {epcHex}, Expected: {expectedEpc}");
 
-                    // Log this situation - seen by verifier first
+                    // Log desta situação - visto pelo verificador primeiro
                     LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},N/A,0,0,DetectedByVerifierFirst,None,0,0,{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
                 }
 
@@ -1021,10 +1146,10 @@ namespace OctaneTagJobControlAPI.Strategies
                 var writeStatus = success ? "Success" : "Failure";
                 Console.WriteLine($"Verifier - TID {tidHex} - current EPC: {epcHex} Expected EPC: {expectedEpc} Operation Status [{writeStatus}]");
 
-                // Handle GPI verification if enabled
+                // Tratar verificação de GPI se habilitado
                 if (enableGpiTrigger && gpiEventTimers.Count > 0)
                 {
-                    // Find the most recent unverified GPI event
+                    // Encontrar o evento GPI não verificado mais recente
                     var unverifiedEvents = gpiEventTimers.Where(e =>
                         !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
                         .OrderByDescending(e => e.Key)
@@ -1032,140 +1157,196 @@ namespace OctaneTagJobControlAPI.Strategies
 
                     if (unverifiedEvents.Any())
                     {
-                        var recentEvent = unverifiedEvents.First();
-                        long eventId = recentEvent.Key;
-                        Stopwatch timer = recentEvent.Value;
-
-                        // Get which reader triggered the event
-                        gpiEventReaders.TryGetValue(eventId, out ImpinjReader eventReader);
-                        gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
-                        gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled);
-                        gpiEventGpoPorts.TryGetValue(eventId, out ushort eventGpoPort);
-
-                        Console.WriteLine($"Tag detected for GPI event {eventId} after {timer.ElapsedMilliseconds}ms: TID={tidHex}, EPC={epcHex}");
-
-                        // Mark this event as verified
-                        gpiEventVerified[eventId] = true;
-
-                        // Set GPO to success if enabled
-                        if (gpoEnabled && eventReader != null)
-                        {
-                            try
-                            {
-                                if (success)
-                                {
-                                    // Success signal (steady on)
-                                    eventReader.SetGpo(eventGpoPort, true);
-                                    Console.WriteLine($"GPO {eventGpoPort} success signal sent (ON) on {readerRole} reader");
-                                }
-                                else
-                                {
-                                    // Wrong EPC signal (double pulse)
-                                    eventReader.SetGpo(eventGpoPort, true);
-                                    Thread.Sleep(500);
-                                    eventReader.SetGpo(eventGpoPort, true);
-                                    Console.WriteLine($"GPO {eventGpoPort} wrong EPC signal sent (double pulse) on {readerRole} reader");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
-                            }
-                        }
-
-                        // Log with GPI information
-                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{writeStatus}_{readerRole},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds},verifier");
-
-                        // Remove from tracking
-                        gpiEventTimers.TryRemove(eventId, out _);
-                        gpiEventReaders.TryRemove(eventId, out _);
-                        gpiEventReaderRoles.TryRemove(eventId, out _);
-                        gpiEventGpoEnabled.TryRemove(eventId, out _);
-                        gpiEventGpoPorts.TryRemove(eventId, out _);
+                        // Processar o evento GPI mais recente
+                        HandleGpiVerification(unverifiedEvents.First(), tidHex, tag, epcHex, expectedEpc, success);
                     }
                 }
 
                 if (success)
                 {
-                    // Check if the tag has already been locked
+                    // Verificar se a tag já foi bloqueada
                     bool alreadyLocked = lockedTags.ContainsKey(tidHex);
 
-                    // If the tag is successfully verified and lock/permalock is enabled but we haven't locked it yet
+                    // Se a tag foi verificada com sucesso e lock/permalock está habilitado, mas ainda não a bloqueamos
                     if ((enableLock || enablePermalock) && !alreadyLocked)
                     {
-                        // Start timing the lock operation
-                        var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
-                        lockTimer.Restart();
-
-                        // Perform either permalock or standard lock operation
-                        if (enablePermalock)
-                        {
-                            Console.WriteLine($"Permalocking tag with TID {tidHex}");
-                            TagOpController.Instance.PermaLockTag(tag, newAccessPassword, sender);
-                        }
-                        else if (enableLock)
-                        {
-                            Console.WriteLine($"Locking tag with TID {tidHex}");
-                            TagOpController.Instance.LockTag(tag, newAccessPassword, sender);
-                        }
-
-                        // Mark this tag as having had a lock operation triggered
-                        lockedTags.TryAdd(tidHex, true);
+                        PerformLockOperation(tidHex, tag, newAccessPassword, sender);
                     }
                     else
                     {
-                        // If we're not locking or the tag is already locked, just record the success
+                        // Se não estamos bloqueando ou a tag já está bloqueada, apenas registramos o sucesso
                         TagOpController.Instance.RecordResult(tidHex, writeStatus, success);
+                        TagOpController.Instance.RecordTagRead(); // Atualizar contador de leituras
                         Console.WriteLine($"Verifier - TID {tidHex} verified successfully. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
                     }
                 }
                 else if (!string.IsNullOrEmpty(expectedEpc))
                 {
-                    if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        Console.WriteLine($"Verification mismatch for TID {tidHex}: expected {expectedEpc}, read {epcHex}. Verification failed.");
-
-                        // If we also have writer role, retry the write directly
-                        if (hasWriterRole)
-                        {
-                            Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
-                            // Retry writing using the expected EPC via the writer reader
-                            TagOpController.Instance.TriggerWriteAndVerify(
-                                tag,
-                                expectedEpc,
-                                writerReader,
-                                cancellationToken,
-                                swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                                newAccessPassword,
-                                true,
-                                1,
-                                false,
-                                3);
-                        }
-                        else
-                        {
-                            // Just log the failure
-                            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},VerificationFailed,0,0,VerifyMismatch,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
-                            TagOpController.Instance.RecordResult(tidHex, "VerificationFailed", false);
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Verifier - TID {tidHex} verified successfully. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
-                    }
+                    HandleVerificationFailure(tidHex, tag, epcHex, expectedEpc);
                 }
             }
         }
 
         /// <summary>
-        /// Common event handler for tag operation completions from both readers
+        /// Método para lidar com falhas de verificação de tags
         /// </summary>
+        /// <param name="tidHex">O TID da tag em formato hexadecimal</param>
+        /// <param name="tag">O objeto Tag com informações da tag</param>
+        /// <param name="epcHex">O EPC atual lido da tag</param>
+        /// <param name="expectedEpc">O EPC esperado para a tag</param>
+        private void HandleVerificationFailure(string tidHex, Tag tag, string epcHex, string expectedEpc)
+        {
+            if (!expectedEpc.Equals(epcHex, StringComparison.InvariantCultureIgnoreCase))
+            {
+                Console.WriteLine($"Verification mismatch for TID {tidHex}: expected {expectedEpc}, read {epcHex}. Verification failed.");
+
+                // Adicionar entrada às métricas de falha se houver métricas específicas do verifier
+                if (readerMetrics.TryGetValue("verifier", out var verifierMetrics))
+                {
+                    verifierMetrics.FailureCount++;
+                }
+
+                // Se também temos papel de writer, tentamos novamente a gravação diretamente
+                if (hasWriterRole)
+                {
+                    try
+                    {
+                        Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
+
+                        // Iniciar um novo timer para esta nova tentativa de escrita
+                        var writeTimer = new Stopwatch();
+                        writeTimer.Start();
+                        swWriteTimers[tidHex] = writeTimer;
+
+                        // Incrementar o contador de ciclos para esta tag
+                        cycleCount.AddOrUpdate(tidHex, 1, (key, oldValue) => oldValue + 1);
+
+                        // Verificar se há limite de tentativas e se ainda não o atingimos
+                        int currentCycle = cycleCount[tidHex];
+                        int maxRetries = 3;  // Valor padrão, pode ser configurável
+
+                        // Interromper retentativas se atingir o máximo
+                        if (currentCycle > maxRetries)
+                        {
+                            Console.WriteLine($"Max retry count ({maxRetries}) reached for TID {tidHex}. Giving up after {currentCycle} attempts.");
+                            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},VerificationFailed,{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},MaxRetriesReached,None,0,{currentCycle},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+                            TagOpController.Instance.RecordResult(tidHex, "MaxRetriesReached", false);
+                            return;
+                        }
+
+                        // Registrar esta tentativa no log
+                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},RetryingWrite,{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},RetryAttempt_{currentCycle},None,0,{currentCycle},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+
+                        // Tentar escrever novamente usando o EPC esperado através do leitor writer
+                        // Usar um maior número de retentativas para esta operação crítica
+                        TagOpController.Instance.TriggerWriteAndVerifyWithMetrics(
+                            tag,
+                            expectedEpc,
+                            writerReader,
+                            cancellationToken,
+                            writeTimer,
+                            newAccessPassword,
+                            true,
+                            1,
+                            false,  // Não fazer auto-verificação, deixar o verificador fazer isso
+                            5);     // Aumentar o número de retentativas para esta operação crítica
+                    }
+                    catch (Exception ex)
+                    {
+                        // Registrar a exceção mas continuar processando
+                        Console.WriteLine($"Error triggering write after verification failure: {ex.Message}");
+                        LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},ErrorRetrying,0,0,Error,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+
+                        // Finalizar como falha se não conseguir retentar
+                        TagOpController.Instance.RecordResult(tidHex, "RetryError", false);
+                    }
+                }
+                else
+                {
+                    // Apenas registramos a falha e esperamos que a instância writer trate dela
+                    Console.WriteLine($"Verification failed - waiting for writer instance to handle it");
+                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},VerificationFailed,{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},NeedsRetry,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+
+                    // Se estamos operando no modo distribuído, não registramos como falha definitiva ainda,
+                    // pois a instância writer pode tratar a falha posteriormente
+                    if (!operatingAsVerifierOnly)
+                    {
+                        TagOpController.Instance.RecordResult(tidHex, "VerificationFailed", false);
+                    }
+                }
+            }
+            else
+            {
+                // Este caso geralmente não deve ocorrer, mas se ocorrer, registramos a inconsistência
+                Console.WriteLine($"Warning: Inconsistent verification state for TID {tidHex}, EPC matches but verification failed");
+                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},InconsistentState,{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},Warning,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,verifier");
+
+                // Tratamos como sucesso, já que o EPC corresponde ao esperado
+                TagOpController.Instance.RecordResult(tidHex, "Success", true);
+                Console.WriteLine($"Verifier - TID {tidHex} verified successfully despite inconsistency. Current EPC: {epcHex} - Written tags registered {TagOpController.Instance.GetSuccessCount()} (TIDs processed)");
+            }
+        }
+
+        // Método auxiliar para processar eventos GPI
+        private void HandleGpiVerification(KeyValuePair<long, Stopwatch> recentEvent, string tidHex, Tag tag, string epcHex, string expectedEpc, bool success)
+        {
+            long eventId = recentEvent.Key;
+            Stopwatch timer = recentEvent.Value;
+
+            // Obter qual leitor acionou o evento
+            gpiEventReaders.TryGetValue(eventId, out ImpinjReader eventReader);
+            gpiEventReaderRoles.TryGetValue(eventId, out string readerRole);
+            gpiEventGpoEnabled.TryGetValue(eventId, out bool gpoEnabled);
+            gpiEventGpoPorts.TryGetValue(eventId, out ushort eventGpoPort);
+
+            Console.WriteLine($"Tag detected for GPI event {eventId} after {timer.ElapsedMilliseconds}ms: TID={tidHex}, EPC={epcHex}");
+
+            // Marcar este evento como verificado
+            gpiEventVerified[eventId] = true;
+
+            // Definir GPO para sucesso se habilitado
+            if (gpoEnabled && eventReader != null)
+            {
+                try
+                {
+                    if (success)
+                    {
+                        // Sinal de sucesso (ligado de forma estável)
+                        eventReader.SetGpo(eventGpoPort, true);
+                        Console.WriteLine($"GPO {eventGpoPort} success signal sent (ON) on {readerRole} reader");
+                    }
+                    else
+                    {
+                        // Sinal de EPC errado (pulso duplo)
+                        eventReader.SetGpo(eventGpoPort, true);
+                        Thread.Sleep(500);
+                        eventReader.SetGpo(eventGpoPort, true);
+                        Console.WriteLine($"GPO {eventGpoPort} wrong EPC signal sent (double pulse) on {readerRole} reader");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error setting GPO {eventGpoPort} on {readerRole} reader: {ex.Message}");
+                }
+            }
+
+            // Log com informações de GPI
+            //LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{epcHex},{expectedEpc},{epcHex},0,{timer.ElapsedMilliseconds},{success ? "Success" : "Failure"}_{readerRole},None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},True,{timer.ElapsedMilliseconds},verifier");
+
+            // Remover do rastreamento
+            gpiEventTimers.TryRemove(eventId, out _);
+            gpiEventReaders.TryRemove(eventId, out _);
+            gpiEventReaderRoles.TryRemove(eventId, out _);
+            gpiEventGpoEnabled.TryRemove(eventId, out _);
+            gpiEventGpoPorts.TryRemove(eventId, out _);
+        }
+
         private void OnTagOpComplete(ImpinjReader sender, TagOpReport report)
         {
             if (report == null || IsCancellationRequested())
                 return;
 
-            // Determine the reader role
+            // Determinar o papel do leitor
             string readerRole = "unknown";
             if (sender == verifierReader)
                 readerRole = "verifier";
@@ -1182,6 +1363,9 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     swWriteTimers[tidHex].Stop();
 
+                    // Registrar o tempo de escrita para métricas
+                    TagOpController.Instance.RecordWriteTime(tidHex, swWriteTimers[tidHex].ElapsedMilliseconds);
+
                     var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
                     var verifiedEpc = writeResult.Tag.Epc?.ToHexString() ?? "N/A";
                     bool success = !string.IsNullOrEmpty(expectedEpc) && expectedEpc.Equals(verifiedEpc, StringComparison.InvariantCultureIgnoreCase);
@@ -1195,7 +1379,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     {
                         Console.WriteLine($"Write operation succeeded for TID {tidHex} on {readerRole} reader.");
 
-                        // If we have a verifier role, trigger verification there
+                        // Se temos um papel de verificador, acionamos a verificação lá
                         if (hasVerifierRole)
                         {
                             TagOpController.Instance.TriggerVerificationRead(
@@ -1205,7 +1389,7 @@ namespace OctaneTagJobControlAPI.Strategies
                                 swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
                                 newAccessPassword);
                         }
-                        // Otherwise if we're a writer-only role with no verifier, do self-verification
+                        // Caso contrário, se somos um papel de writer-only sem verificador, fazemos auto-verificação
                         else if (operatingAsWriterOnly)
                         {
                             TagOpController.Instance.TriggerVerificationRead(
@@ -1226,233 +1410,270 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     swVerifyTimers[tidHex].Stop();
 
-                    var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
-                    if (string.IsNullOrEmpty(expectedEpc))
-                    {
-                        expectedEpc = TagOpController.Instance.GetNextEpcForTag(readResult.Tag.Epc.ToHexString(), tidHex, _sku, _companyPrefixLength, _encodingMethod);
-                    }
-                    var verifiedEpc = readResult.Tag.Epc?.ToHexString() ?? "N/A";
-                    var success = verifiedEpc.Equals(expectedEpc, StringComparison.InvariantCultureIgnoreCase);
-                    var status = success ? "Success" : "Failure";
+                    // Registrar o tempo de verificação para métricas
+                    TagOpController.Instance.RecordVerifyTime(tidHex, swVerifyTimers[tidHex].ElapsedMilliseconds);
 
-                    // Get or create a lock timer for this tag
-                    var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
-                    // Determine lock status based on whether we're locking and if the timer has run
-                    string lockStatus = "None";
-                    if (enablePermalock && lockedTags.ContainsKey(tidHex))
-                        lockStatus = "Permalocked";
-                    else if (enableLock && lockedTags.ContainsKey(tidHex))
-                        lockStatus = "Locked";
-
-                    // Check if this read was part of a GPI-triggered event
-                    bool isGpiTriggered = false;
-                    long matchingEventId = 0;
-                    long gpiVerificationTime = 0;
-                    ImpinjReader eventReader = null;
-                    string gpiReaderRole = "unknown";
-                    bool gpoEnabled = false;
-                    ushort eventGpoPort = 1;
-
-                    if (enableGpiTrigger)
-                    {
-                        // Find if this tag verification corresponds to a recent GPI event
-                        var unverifiedEvents = gpiEventTimers.Where(e =>
-                            !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
-                            .OrderByDescending(e => e.Key)
-                            .ToList();
-
-                        if (unverifiedEvents.Any())
-                        {
-                            var recentEvent = unverifiedEvents.First();
-                            matchingEventId = recentEvent.Key;
-                            gpiVerificationTime = recentEvent.Value.ElapsedMilliseconds;
-
-                            // Get reader information for this event
-                            gpiEventReaders.TryGetValue(matchingEventId, out eventReader);
-                            gpiEventReaderRoles.TryGetValue(matchingEventId, out gpiReaderRole);
-                            gpiEventGpoEnabled.TryGetValue(matchingEventId, out gpoEnabled);
-                            gpiEventGpoPorts.TryGetValue(matchingEventId, out eventGpoPort);
-
-                            // Mark as GPI triggered and verified
-                            isGpiTriggered = true;
-                            gpiEventVerified[matchingEventId] = true;
-
-                            Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId} on {gpiReaderRole} reader: TID={tidHex}, successful={success}");
-
-                            // Set GPO signal based on verification result if enabled
-                            if (gpoEnabled && eventReader != null)
-                            {
-                                try
-                                {
-                                    if (success)
-                                    {
-                                        // Success signal (steady on for 1 second)
-                                        eventReader.SetGpo(eventGpoPort, true);
-                                        Console.WriteLine($"GPO {eventGpoPort} set to ON (success) on {gpiReaderRole} reader for GPI event {matchingEventId}");
-
-                                        // Schedule GPO reset after 1 second
-                                        new Timer(state => {
-                                            try
-                                            {
-                                                if (eventReader != null)
-                                                {
-                                                    eventReader.SetGpo(eventGpoPort, false);
-                                                    Console.WriteLine($"GPO {eventGpoPort} reset after success signal on {gpiReaderRole} reader");
-                                                }
-                                            }
-                                            catch (Exception) { /* Ignore timer errors */ }
-                                        }, null, 1000, Timeout.Infinite);
-                                    }
-                                    else
-                                    {
-                                        // EPC mismatch signal (triple pulse)
-                                        eventReader.SetGpo(eventGpoPort, true);
-                                        Thread.Sleep(100);
-                                        eventReader.SetGpo(eventGpoPort, false);
-                                        Thread.Sleep(100);
-                                        eventReader.SetGpo(eventGpoPort, true);
-                                        Thread.Sleep(100);
-                                        eventReader.SetGpo(eventGpoPort, false);
-                                        Thread.Sleep(100);
-                                        eventReader.SetGpo(eventGpoPort, true);
-                                        Thread.Sleep(100);
-                                        eventReader.SetGpo(eventGpoPort, false);
-                                        Console.WriteLine($"GPO {eventGpoPort} triple pulse (EPC mismatch) on {gpiReaderRole} reader for GPI event {matchingEventId}");
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"Error setting GPO {eventGpoPort} on {gpiReaderRole} reader: {ex.Message}");
-                                }
-                            }
-
-                            // Remove from tracking
-                            gpiEventTimers.TryRemove(matchingEventId, out _);
-                            gpiEventReaders.TryRemove(matchingEventId, out _);
-                            gpiEventReaderRoles.TryRemove(matchingEventId, out _);
-                            gpiEventGpoEnabled.TryRemove(matchingEventId, out _);
-                            gpiEventGpoPorts.TryRemove(matchingEventId, out _);
-                        }
-                    }
-
-                    // Log tag read/write result, including GPI and reader information if applicable
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},{isGpiTriggered},{gpiVerificationTime},{readerRole}");
-                    TagOpController.Instance.RecordResult(tidHex, status, success);
-
-                    Console.WriteLine($"Verification result for TID {tidHex} on {readerRole} reader: {status}");
-
-                    cycleCount.AddOrUpdate(tidHex, 1, (key, oldValue) => oldValue + 1);
-
-                    if (!success)
-                    {
-                        // If we have writer role in the same instance, try to rewrite
-                        if (hasWriterRole)
-                        {
-                            try
-                            {
-                                Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
-                                TagOpController.Instance.TriggerWriteAndVerify(
-                                    readResult.Tag,
-                                    expectedEpc,
-                                    writerReader,
-                                    cancellationToken,
-                                    swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
-                                    newAccessPassword,
-                                    true,
-                                    1,
-                                    true,
-                                    3);
-                            }
-                            catch (Exception ex)
-                            {
-                                // Log exception but continue processing
-                                Console.WriteLine($"Error triggering write after verification failure: {ex.Message}");
-                            }
-                        }
-                        else
-                        {
-                            // Log the failure and wait for writer instance to handle it
-                            Console.WriteLine($"Verification failed - waiting for writer instance to handle it");
-                            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{result.Tag.Epc.ToHexString()},{expectedEpc},VerificationFailed,{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},NeedsRetry,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},False,0,{readerRole}");
-                        }
-                    }
+                    // Processar resultado da verificação
+                    HandleReadOpResult(readResult, tidHex, readerRole);
                 }
                 else if (result is TagLockOpResult lockResult)
                 {
-                    // Handle lock operation result
-                    var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
-                    lockTimer.Stop();
-
-                    bool success = lockResult.Result == LockResultStatus.Success;
-                    string lockStatus = enablePermalock ? "Permalocked" : "Locked";
-                    string lockOpStatus = success ? "Success" : "Failure";
-
-                    Console.WriteLine($"{lockStatus} operation for TID {tidHex} on {readerRole} reader: {lockOpStatus} in {lockTimer.ElapsedMilliseconds}ms");
-
-                    // If lock failed but EPC is still correct, we've still completed the main operation
-                    var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
-                    var currentEpc = lockResult.Tag.Epc?.ToHexString() ?? "N/A";
-
-                    bool epcCorrect = !string.IsNullOrEmpty(expectedEpc) &&
-                                      expectedEpc.Equals(currentEpc, StringComparison.InvariantCultureIgnoreCase);
-
-                    // Overall success is based on the EPC being correct, even if lock fails
-                    if (epcCorrect)
-                    {
-                        TagOpController.Instance.RecordResult(tidHex, "Success", true);
-                    }
-
-                    // Log the lock operation
-                    LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{currentEpc},{expectedEpc},{currentEpc},{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},Success,{(success ? lockStatus : lockStatus + "Failed")},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{lockResult.Tag.PeakRssiInDbm},{lockResult.Tag.AntennaPortNumber},False,0,{readerRole}");
+                    // Tratar o resultado da operação de bloqueio
+                    HandleLockOpResult(lockResult, tidHex, readerRole);
                 }
             }
         }
 
-        private void LogSuccessCount(object state)
+        private void HandleReadOpResult(TagReadOpResult readResult, string tidHex, string readerRole)
         {
+            var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
+            if (string.IsNullOrEmpty(expectedEpc))
+            {
+                expectedEpc = TagOpController.Instance.GetNextEpcForTag(readResult.Tag.Epc.ToHexString(), tidHex, _sku, _companyPrefixLength, _encodingMethod);
+            }
+
+            var verifiedEpc = readResult.Tag.Epc?.ToHexString() ?? "N/A";
+            var success = verifiedEpc.Equals(expectedEpc, StringComparison.InvariantCultureIgnoreCase);
+            var status = success ? "Success" : "Failure";
+
+            // Obter ou criar um temporizador de bloqueio para esta tag
+            var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
+
+            // Determinar o status de bloqueio com base em se estamos bloqueando e se o temporizador foi executado
+            string lockStatus = "None";
+            if (enablePermalock && lockedTags.ContainsKey(tidHex))
+                lockStatus = "Permalocked";
+            else if (enableLock && lockedTags.ContainsKey(tidHex))
+                lockStatus = "Locked";
+
+            // Verificar se esta leitura fazia parte de um evento acionado por GPI
+            CheckAndHandleGpiEvent(tidHex, readResult.Tag, verifiedEpc, expectedEpc, success);
+
+            // Registrar operação de tag de leitura/gravação, incluindo informações de GPI e leitor, se aplicável
+            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{readResult.Tag.Epc.ToHexString()},{expectedEpc},{verifiedEpc},{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},{status},{lockStatus},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{readResult.Tag.PeakRssiInDbm},{readResult.Tag.AntennaPortNumber},False,0,{readerRole}");
+            TagOpController.Instance.RecordResult(tidHex, status, success);
+
+            // Registrar leitura de tag para cálculo de taxa de leitura
+            TagOpController.Instance.RecordTagRead();
+
+            Console.WriteLine($"Verification result for TID {tidHex} on {readerRole} reader: {status}");
+
+            cycleCount.AddOrUpdate(tidHex, 1, (key, oldValue) => oldValue + 1);
+
+            if (!success)
+            {
+                HandleReadVerificationFailure(tidHex, readResult.Tag, verifiedEpc, expectedEpc, readerRole);
+            }
+        }
+
+        private void CheckAndHandleGpiEvent(string tidHex, Tag tag, string verifiedEpc, string expectedEpc, bool success)
+        {
+            if (enableGpiTrigger)
+            {
+                // Procurar se esta verificação de tag corresponde a um evento GPI recente
+                var unverifiedEvents = gpiEventTimers.Where(e =>
+                    !gpiEventVerified.TryGetValue(e.Key, out bool verified) || !verified)
+                    .OrderByDescending(e => e.Key)
+                    .ToList();
+
+                if (unverifiedEvents.Any())
+                {
+                    var recentEvent = unverifiedEvents.First();
+                    long matchingEventId = recentEvent.Key;
+                    long gpiVerificationTime = recentEvent.Value.ElapsedMilliseconds;
+
+                    // Obter informações do leitor para este evento
+                    gpiEventReaders.TryGetValue(matchingEventId, out ImpinjReader eventReader);
+                    gpiEventReaderRoles.TryGetValue(matchingEventId, out string gpiReaderRole);
+                    gpiEventGpoEnabled.TryGetValue(matchingEventId, out bool gpoEnabled);
+                    gpiEventGpoPorts.TryGetValue(matchingEventId, out ushort eventGpoPort);
+
+                    // Marcar como acionado por GPI e verificado
+                    gpiEventVerified[matchingEventId] = true;
+
+                    Console.WriteLine($"Tag read operation completed for GPI event {matchingEventId} on {gpiReaderRole} reader: TID={tidHex}, successful={success}");
+
+                    // Definir sinal GPO com base no resultado da verificação, se habilitado
+                    HandleGpoSignal(success, eventReader, eventGpoPort, gpiReaderRole, matchingEventId, gpoEnabled);
+
+                    // Remover do rastreamento
+                    gpiEventTimers.TryRemove(matchingEventId, out _);
+                    gpiEventReaders.TryRemove(matchingEventId, out _);
+                    gpiEventReaderRoles.TryRemove(matchingEventId, out _);
+                    gpiEventGpoEnabled.TryRemove(matchingEventId, out _);
+                    gpiEventGpoPorts.TryRemove(matchingEventId, out _);
+                }
+            }
+        }
+
+        private void HandleGpoSignal(bool success, ImpinjReader reader, ushort gpoPort, string readerRole, long eventId, bool gpoEnabled)
+        {
+            if (!gpoEnabled || reader == null)
+                return;
+
             try
             {
-                int successCount = TagOpController.Instance.GetSuccessCount();
-                int totalReadCount = TagOpController.Instance.GetTotalReadCount();
-                int lockedCount = lockedTags.Count;
-                int gpiEventsTotal = (int)lastGpiEventId;
-                int gpiEventsVerified = gpiEventVerified.Count(kv => kv.Value);
-                int gpiEventsPending = gpiEventTimers.Count;
-
-                string activeRoles = "";
-                if (hasDetectorRole) activeRoles += "Detector ";
-                if (hasWriterRole) activeRoles += "Writer ";
-                if (hasVerifierRole) activeRoles += "Verifier ";
-
-                lock (status)
+                if (success)
                 {
-                    status.TotalTagsProcessed = totalReadCount;
-                    status.SuccessCount = successCount;
-                    status.FailureCount = totalReadCount - successCount;
-                    status.ProgressPercentage = totalReadCount > 0
-                        ? Math.Min(100, (double)successCount / totalReadCount * 100)
-                        : 0;
+                    // Sinal de sucesso (ligado de forma estável por 1 segundo)
+                    reader.SetGpo(gpoPort, true);
+                    Console.WriteLine($"GPO {gpoPort} set to ON (success) on {readerRole} reader for GPI event {eventId}");
 
-                    // Add lock and GPI status to metrics
-                    status.Metrics["LockedTags"] = lockedCount;
-                    status.Metrics["LockEnabled"] = enableLock;
-                    status.Metrics["PermalockEnabled"] = enablePermalock;
-                    status.Metrics["GpiEventsTotal"] = gpiEventsTotal;
-                    status.Metrics["GpiEventsVerified"] = gpiEventsVerified;
-                    status.Metrics["GpiEventsMissingTag"] = gpiEventsTotal - gpiEventsVerified;
-                    status.Metrics["GpiEventsPending"] = gpiEventsPending;
-                    status.Metrics["ActiveRoles"] = activeRoles.Trim();
+                    // Programar reset de GPO após 1 segundo
+                    new Timer(state => {
+                        try
+                        {
+                            if (reader != null)
+                            {
+                                reader.SetGpo(gpoPort, false);
+                                Console.WriteLine($"GPO {gpoPort} reset after success signal on {readerRole} reader");
+                            }
+                        }
+                        catch (Exception) { /* Ignorar erros de timer */ }
+                    }, null, 1000, Timeout.Infinite);
                 }
-
-                Console.WriteLine($"[{activeRoles.Trim()}] Total Read [{totalReadCount}] Success count: [{successCount}] Locked/Permalocked: [{lockedCount}] GPI Events: {gpiEventsTotal} (Verified: {gpiEventsVerified}, Missing: {gpiEventsTotal - gpiEventsVerified}, Pending: {gpiEventsPending})");
+                else
+                {
+                    // Sinal de incompatibilidade de EPC (pulso triplo)
+                    reader.SetGpo(gpoPort, true);
+                    Thread.Sleep(100);
+                    reader.SetGpo(gpoPort, false);
+                    Thread.Sleep(100);
+                    reader.SetGpo(gpoPort, true);
+                    Thread.Sleep(100);
+                    reader.SetGpo(gpoPort, false);
+                    Thread.Sleep(100);
+                    reader.SetGpo(gpoPort, true);
+                    Thread.Sleep(100);
+                    reader.SetGpo(gpoPort, false);
+                    Console.WriteLine($"GPO {gpoPort} triple pulse (EPC mismatch) on {readerRole} reader for GPI event {eventId}");
+                }
             }
             catch (Exception ex)
             {
-                // Ignore timer exceptions
-                Console.WriteLine($"Error in LogSuccessCount: {ex.Message}");
+                Console.WriteLine($"Error setting GPO {gpoPort} on {readerRole} reader: {ex.Message}");
             }
         }
 
+        private void HandleReadVerificationFailure(string tidHex, Tag tag, string verifiedEpc, string expectedEpc, string readerRole)
+        {
+            // Se temos papel de writer no mesmo instance, tentamos reescrever
+            if (hasWriterRole)
+            {
+                try
+                {
+                    Console.WriteLine($"Verification failed - retrying write locally (since we have writer role)");
+                    TagOpController.Instance.TriggerWriteAndVerifyWithMetrics(
+                        tag,
+                        expectedEpc,
+                        writerReader,
+                        cancellationToken,
+                        swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()),
+                        newAccessPassword,
+                        true,
+                        1,
+                        true,
+                        3);
+                }
+                catch (Exception ex)
+                {
+                    // Registrar exceção mas continuar processando
+                    Console.WriteLine($"Error triggering write after verification failure: {ex.Message}");
+                }
+            }
+            else
+            {
+                // Registrar a falha e esperar que a instance writer trate dela
+                Console.WriteLine($"Verification failed - waiting for writer instance to handle it");
+                LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{tag.Epc.ToHexString()},{expectedEpc},VerificationFailed,{swWriteTimers[tidHex].ElapsedMilliseconds},{swVerifyTimers[tidHex].ElapsedMilliseconds},NeedsRetry,None,0,{cycleCount.GetOrAdd(tidHex, 0)},{tag.PeakRssiInDbm},{tag.AntennaPortNumber},False,0,{readerRole}");
+            }
+        }
+
+        // Método auxiliar para realizar operações de bloqueio
+        private void PerformLockOperation(string tidHex, Tag tag, string accessPassword, ImpinjReader reader)
+        {
+            // Iniciar a temporização da operação de bloqueio
+            var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
+            lockTimer.Restart();
+
+            // Realizar operação de permalock ou bloqueio padrão
+            if (enablePermalock)
+            {
+                Console.WriteLine($"Permalocking tag with TID {tidHex}");
+                TagOpController.Instance.PermaLockTag(tag, accessPassword, reader);
+            }
+            else if (enableLock)
+            {
+                Console.WriteLine($"Locking tag with TID {tidHex}");
+                TagOpController.Instance.LockTag(tag, accessPassword, reader);
+            }
+
+            // Marcar esta tag como tendo tido uma operação de bloqueio acionada
+            lockedTags.TryAdd(tidHex, true);
+        }
+
+        // Método auxiliar para processar resultados de operações de bloqueio
+        private void HandleLockOpResult(TagLockOpResult lockResult, string tidHex, string readerRole)
+        {
+            // Obter o temporizador de bloqueio para esta tag
+            var lockTimer = swLockTimers.GetOrAdd(tidHex, _ => new Stopwatch());
+            lockTimer.Stop();
+
+            bool success = lockResult.Result == LockResultStatus.Success;
+            string lockStatus = enablePermalock ? "Permalocked" : "Locked";
+            string lockOpStatus = success ? "Success" : "Failure";
+
+            Console.WriteLine($"{lockStatus} operation for TID {tidHex} on {readerRole} reader: {lockOpStatus} in {lockTimer.ElapsedMilliseconds}ms");
+
+            // Se o bloqueio falhou mas o EPC ainda está correto, ainda completamos a operação principal
+            var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
+            var currentEpc = lockResult.Tag.Epc?.ToHexString() ?? "N/A";
+
+            bool epcCorrect = !string.IsNullOrEmpty(expectedEpc) &&
+                              expectedEpc.Equals(currentEpc, StringComparison.InvariantCultureIgnoreCase);
+
+            // Sucesso geral é baseado no EPC estar correto, mesmo se o bloqueio falhar
+            if (epcCorrect)
+            {
+                TagOpController.Instance.RecordResult(tidHex, "Success", true);
+                TagOpController.Instance.RecordTagRead(); // Atualizar contador de leituras
+            }
+
+            // Atualizar o status de bloqueio no cache do controlador de tags
+            UpdateTagLockStatus(tidHex, lockResult.Result, lockStatus);
+
+            // Registrar a operação de bloqueio
+            LogToCsv($"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{tidHex},{currentEpc},{expectedEpc},{currentEpc},{swWriteTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},{swVerifyTimers.GetOrAdd(tidHex, _ => new Stopwatch()).ElapsedMilliseconds},Success,{(success ? lockStatus : lockStatus + "Failed")},{lockTimer.ElapsedMilliseconds},{cycleCount.GetOrAdd(tidHex, 0)},{lockResult.Tag.PeakRssiInDbm},{lockResult.Tag.AntennaPortNumber},False,0,{readerRole}");
+        }
+
+        // Método auxiliar para atualizar o status de bloqueio no cache
+        private void UpdateTagLockStatus(string tidHex, LockResultStatus result, string lockStatus)
+        {
+            if (string.IsNullOrEmpty(tidHex) || result != LockResultStatus.Success)
+                return;
+
+            // Criar um novo objeto de status de bloqueio
+            TagOpController.TagLockStatus lockStatusObj = new TagOpController.TagLockStatus();
+
+            // Configurar os estados de bloqueio com base na operação realizada
+            if (lockStatus == "Permalocked")
+            {
+                lockStatusObj.EpcLockState = TagOpController.LockState.Permalocked;
+                lockStatusObj.AccessPasswordLockState = TagOpController.LockState.Permalocked;
+            }
+            else if (lockStatus == "Locked")
+            {
+                lockStatusObj.EpcLockState = TagOpController.LockState.Locked;
+                lockStatusObj.AccessPasswordLockState = TagOpController.LockState.Locked;
+            }
+
+            // Atualizar o cache do controlador de tags
+            TagOpController.Instance.UpdateTagLockStatus(tidHex, lockStatusObj);
+        }
+
+       
+
+        
         /// <summary>
         /// Overrides the base class CleanupReaders method to handle the case where not all readers are available
         /// </summary>
