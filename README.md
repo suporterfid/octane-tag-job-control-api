@@ -8,9 +8,10 @@ A RESTful API service for managing and controlling RFID job operations. This API
 - Multiple job strategies for different RFID operations:
   - **BatchSerializationStrategy**: Batch processing of tag serialization
   - **CheckBoxStrategy**: Single-reader tag verification and encoding
-  - **MultiReaderEnduranceStrategy**: Dual-reader endurance testing with optional locking/permalocking
+  - **MultiReaderEnduranceStrategy**: Multi-reader testing with optional locking/permalocking
   - **ReadOnlyLoggingStrategy**: Non-invasive tag monitoring
   - **SpeedTestStrategy**: Performance testing of tag operations
+  - **ImpinjR700CapStrategy**: Impinj R700 CAP application support
 - Real-time job status monitoring
 - Centralized configuration management
 - Detailed job metrics and logs
@@ -21,6 +22,7 @@ A RESTful API service for managing and controlling RFID job operations. This API
 - Support for multiple reader configurations
 - Extensive job strategy customization options
 - EPC list generation utilities
+- SGTIN-96 encoding support
 
 ## Architecture
 
@@ -254,73 +256,6 @@ Expected response:
 }
 ```
 
-#### Operation Flow
-
-1. When GPI Port 1 goes HIGH:
-   - Tag collection begins for a configurable period (default 10 seconds)
-   - User confirms collected tag count
-   - Write operations begin with selected encoding method
-   - Verification phase starts automatically after writing
-   - Results are logged with original and new EPCs
-
-2. When GPI Port 1 goes LOW:
-   - Current cycle completes
-   - Tag collections are cleared
-   - System prepares for next cycle
-
-#### Monitoring Status
-
-```bash
-curl -X GET "http://localhost:5000/api/job/{jobId}"
-```
-
-Example response:
-```json
-{
-  "status": "Running",
-  "metrics": {
-    "totalTagsProcessed": 10,
-    "successCount": 8,
-    "failureCount": 2,
-    "progressPercentage": 80.0,
-    "currentOperation": "Verifying Tags",
-    "encodingMethod": "SGTIN96",
-    "collectedTags": 10,
-    "verifiedTags": 8,
-    "elapsedSeconds": 15.5,
-    "sku": "0123456789012",
-    "epcHeader": "E7"
-  }
-}
-```
-
-#### Tag Operation Results
-
-```bash
-curl -X GET "http://localhost:5000/api/job/{jobId}/tags"
-```
-
-Example response:
-```json
-{
-  "tags": [
-    {
-      "tid": "E280116060000000000002A2",
-      "originalEpc": "E280116060000000000002A2",
-      "expectedEpc": "E70123456789012A2",
-      "verifiedEpc": "E70123456789012A2",
-      "encodingMethod": "BasicWithTidSuffix",
-      "result": "Success",
-      "timestamp": "2024-01-20T15:30:45Z"
-    }
-  ],
-  "totalCount": 1,
-  "pageSize": 50,
-  "currentPage": 1
-}
-```
-
-
 ### MultiReaderEnduranceStrategy
 Multi-reader strategy for endurance testing that can utilize up to three readers (detector, writer, and verifier). Uses separate readers for reading, writing and verifying operations, supporting continuous testing scenarios. Features:
 - Optional tag locking/permalocking
@@ -329,6 +264,7 @@ Multi-reader strategy for endurance testing that can utilize up to three readers
 - Automatic retry on verification failure
 - GPI/GPO support for tag presence detection and status indication
 - Flexible reader role combinations
+- SGTIN-96 encoding support
 
 #### Configuration Options
 
@@ -345,7 +281,86 @@ Each reader can be configured with:
 - Lock/permalock options (for writer)
 - Verification timeouts and retry settings
 
-#### Example Configurations
+#### SGTIN-96 Encoding with Custom GTIN
+
+Here's an example configuration for using the MultiReaderEnduranceStrategy with three readers and SGTIN-96 encoding for a specific GTIN (7891033079360):
+
+```bash
+curl -X POST "http://localhost:5000/api/job" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "SGTIN_Encoding_Test",
+    "strategyType": "MultiReaderEnduranceStrategy",
+    "readerSettings": {
+      "detector": {
+        "hostname": "192.168.68.248",
+        "txPowerInDbm": 18,
+        "antennaPort": 1,
+        "includeAntennaPortNumber": true,
+        "includeFastId": true,
+        "includePeakRssi": true,
+        "parameters": {
+          "enableGpiTrigger": "false",
+          "ReaderID": "Detector-01"
+        }
+      },
+      "writer": {
+        "hostname": "192.168.1.100",
+        "txPowerInDbm": 33,
+        "antennaPort": 1,
+        "includeAntennaPortNumber": true,
+        "includeFastId": true,
+        "includePeakRssi": true,
+        "searchMode": "DualTarget",
+        "parameters": {
+          "enableLock": "true",
+          "enablePermalock": "false",
+          "ReaderID": "Writer-01"
+        }
+      },
+      "verifier": {
+        "hostname": "192.168.68.93",
+        "txPowerInDbm": 33,
+        "antennaPort": 1,
+        "includeAntennaPortNumber": true,
+        "includeFastId": true,
+        "includePeakRssi": true,
+        "parameters": {
+          "enableGpiTrigger": "true",
+          "gpiPort": "1",
+          "gpiTriggerState": "true",
+          "enableGpoOutput": "true",
+          "gpoPort": "1",
+          "gpoVerificationTimeoutMs": "1000",
+          "ReaderID": "Verifier-01"
+        }
+      }
+    },
+    "parameters": {
+      "sku": "7891033079360",
+      "epcHeader": "30",
+      "encodingMethod": "SGTIN96",
+      "partitionValue": "6",
+      "itemReference": "0",
+      "enableLock": "true",
+      "enablePermalock": "false",
+      "maxCycles": "10000"
+    }
+  }'
+```
+
+This configuration will:
+1. Use the GTIN "7891033079360" for SGTIN-96 encoding
+2. Apply the partition value 6 to determine bit allocations
+3. Use the header "30" (standard for SGTIN-96)
+4. Write EPCs using SGTIN-96 format with TID-derived serials
+5. Verify tags after writing
+6. Lock tags (but not permalock)
+7. Use GPI/GPO on the verifier for status indication
+
+The resulting EPC for each tag will be in SGTIN-96 format containing components of the GTIN with a TID-derived serial.
+
+#### Other Configuration Examples
 
 1. **Full Configuration (All Readers)**
 ```bash
@@ -380,19 +395,6 @@ curl -X POST "http://localhost:5000/api/job" \
     }
   }'
 ```
-Expected response:
-```json
-{
-  "jobId": "job123",
-  "status": "Created",
-  "metrics": {
-    "activeRoles": "Detector Writer Verifier",
-    "hasDetectorRole": true,
-    "hasWriterRole": true,
-    "hasVerifierRole": true
-  }
-}
-```
 
 2. **Writer-Only Configuration**
 ```bash
@@ -413,19 +415,6 @@ curl -X POST "http://localhost:5000/api/job" \
       }
     }
   }'
-```
-Expected response:
-```json
-{
-  "jobId": "job124",
-  "status": "Created",
-  "metrics": {
-    "activeRoles": "Writer",
-    "hasDetectorRole": false,
-    "hasWriterRole": true,
-    "hasVerifierRole": false
-  }
-}
 ```
 
 3. **Writer-Verifier with GPI Settings**
@@ -458,71 +447,27 @@ curl -X POST "http://localhost:5000/api/job" \
     }
   }'
 ```
-Expected response:
-```json
-{
-  "jobId": "job125",
-  "status": "Created",
-  "metrics": {
-    "activeRoles": "Writer Verifier",
-    "hasDetectorRole": false,
-    "hasWriterRole": true,
-    "hasVerifierRole": true,
-    "verifierGpiEnabled": true,
-    "verifierGpiPort": "1",
-    "verifierGpoEnabled": true,
-    "verifierGpoPort": "1"
-  }
-}
-```
 
-4. **Verifier-Only with GPI Settings**
+#### Starting a Job
+
+Once you've created a job (and received its ID), you can start it:
+
 ```bash
-curl -X POST "http://localhost:5000/api/job" \
+curl -X POST "http://localhost:5000/api/job/job123/start" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "VerifierOnlyGpiTest",
-    "strategyType": "MultiReaderEnduranceStrategy",
-    "readerSettings": {
-      "verifier": {
-        "hostname": "192.168.68.93",
-        "txPowerInDbm": 33,
-        "parameters": {
-          "enableGpiTrigger": "true",
-          "gpiPort": "1",
-          "gpiTriggerState": "true",
-          "enableGpoOutput": "true",
-          "gpoPort": "1",
-          "gpoVerificationTimeoutMs": "1000"
-        }
-      }
-    }
+    "timeoutSeconds": 3600
   }'
 ```
-Expected response:
-```json
-{
-  "jobId": "job126",
-  "status": "Created",
-  "metrics": {
-    "activeRoles": "Verifier",
-    "hasDetectorRole": false,
-    "hasWriterRole": false,
-    "hasVerifierRole": true,
-    "verifierGpiEnabled": true,
-    "verifierGpiPort": "1",
-    "verifierGpoEnabled": true,
-    "verifierGpoPort": "1"
-  }
-}
-```
+
+This starts the job with a timeout of 1 hour (3600 seconds).
 
 #### Monitoring Job Status
 
-The job status response includes detailed metrics for each active reader role:
+To check how your job is progressing:
 
 ```bash
-curl -X GET "http://localhost:5000/api/job/{jobId}"
+curl -X GET "http://localhost:5000/api/job/job123"
 ```
 
 Example response:
@@ -559,36 +504,43 @@ Example response:
 }
 ```
 
-#### Monitoring Job Status and Metrics
+#### Detailed Metrics
 
-- Use `GET /api/job/{jobId}` to retrieve the current status of the job, including:
-  - Current operation state
-  - Success/failure counts
-  - Reader roles and states
-  - Current cycle count
-- Use `GET /api/job/{jobId}/metrics` to get detailed metrics including:
-  - Write operation performance
-  - Verification success rate
-  - Lock operation statistics
-  - Reader-specific metrics
-  - Tag operation timing data
-- Use `GET /api/job/{jobId}/logs` to view job logs with detailed operation history
-- Use `GET /api/job/{jobId}/tags` to get tag read/write data including:
-  - TID/EPC pairs
-  - Operation timestamps
-  - Success/failure status
-  - Reader identification
+To get detailed metrics for your job:
+
+```bash
+curl -X GET "http://localhost:5000/api/job/job123/metrics"
+```
+
+#### Job Logs
+
+To view the logs for your job:
+
+```bash
+curl -X GET "http://localhost:5000/api/job/job123/logs"
+```
+
+#### Tag Data
+
+To get detailed information about processed tags:
+
+```bash
+curl -X GET "http://localhost:5000/api/job/job123/tags?page=1&pageSize=50&sortBy=timestamp&descending=true"
+```
 
 #### Stopping a Job
 
-To stop a running job, use:
+When you're done, stop the job:
 
 ```bash
-curl -X POST "http://localhost:5000/api/job/{jobId}/stop"
+curl -X POST "http://localhost:5000/api/job/job123/stop"
 ```
 
 ### SpeedTestStrategy
 Performance testing strategy for evaluating tag operation speed and reliability.
+
+### ImpinjR700CapStrategy
+Specialized strategy for Impinj R700 readers implementing the CAP (Control Application) requirements, offering REST-based tag reading and writing functionality.
 
 ## Configuration Options
 
@@ -608,95 +560,11 @@ Each reader can be configured with:
 Strategies can be customized with:
 
 - Read/write parameters
-- EPC encoding options
+- EPC encoding options (BasicWithTidSuffix, SGTIN96)
 - Lock/permalock settings
 - Test duration and cycle limits
 - Multi-antenna options
-
-## Example Usage
-
-### Creating a Job
-
-```bash
-curl -X POST "http://localhost:5000/api/job" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "ReadOnlyJob",
-    "strategyType": "ReadOnlyLoggingStrategy",
-    "readerSettings": {
-      "writer": {
-        "hostname": "192.168.1.100",
-        "txPowerInDbm": 30,
-        "antennaPort": 1,
-        "searchMode": "DualTarget"
-      }
-    },
-    "parameters": {
-      "readDurationSeconds": "60",
-      "filterDuplicates": "true"
-    }
-  }'
-```
-
-### Creating an Endurance Test Job
-
-```bash
-curl -X POST "http://localhost:5000/api/job" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "EnduranceTest",
-    "strategyType": "MultiReaderEnduranceStrategy",
-    "readerSettings": {
-      "detector": {
-        "hostname": "192.168.68.248",
-        "txPowerInDbm": 18
-      },
-      "writer": {
-        "hostname": "192.168.1.100",
-        "txPowerInDbm": 33
-      },
-      "verifier": {
-        "hostname": "192.168.68.93",
-        "txPowerInDbm": 33
-      }
-    },
-    "parameters": {
-      "epcHeader": "E7",
-      "sku": "012345678901",
-      "enableLock": "false",
-      "enablePermalock": "false",
-      "maxCycles": "10000"
-    }
-  }'
-```
-
-### Starting a Job
-
-```bash
-curl -X POST "http://localhost:5000/api/job/{jobId}/start" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "timeoutSeconds": 300
-  }'
-```
-
-### Monitoring Job Status
-
-```bash
-curl -X GET "http://localhost:5000/api/job/{jobId}"
-```
-
-### Getting Tag Data
-
-```bash
-curl -X GET "http://localhost:5000/api/job/{jobId}/tags?page=1&pageSize=50&sortBy=timestamp&descending=true"
-```
-
-### Stopping a Job
-
-```bash
-curl -X POST "http://localhost:5000/api/job/{jobId}/stop"
-```
+- GPI/GPO settings
 
 ## Extending the API
 

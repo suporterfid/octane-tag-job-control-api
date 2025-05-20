@@ -11,37 +11,48 @@ function jobControl() {
         refreshInterval: null,
         
         config: {
-            name: 'EnduranceTest',
+            name: 'SGTIN_Encoding_Test',
             hasDetector: true,
             hasWriter: true,
             hasVerifier: true,
             detector: {
-                hostname: '192.168.68.149',
-                txPowerInDbm: 12,
-                antennaPort: 1,
-                enableGpiTrigger: false,
-                gpiPort: 1
-            },
-            writer: {
-                hostname: '192.168.1.92',
-                txPowerInDbm: 12,
-                antennaPort: 1,
-                enableLock: false,
-                enablePermalock: false
-            },
-            verifier: {
-                hostname: '192.168.68.96',
-                txPowerInDbm: 12,
+                hostname: '192.168.68.248',
+                txPowerInDbm: 18,
                 antennaPort: 1,
                 enableGpiTrigger: false,
                 gpiPort: 1,
-                enableGpoOutput: false,
-                gpoPort: 1
+                readerID: 'Detector-01'
+            },
+            writer: {
+                hostname: '192.168.1.100',
+                txPowerInDbm: 33,
+                antennaPort: 1,
+                enableLock: true,
+                enablePermalock: false,
+                readerID: 'Writer-01',
+                searchMode: 'DualTarget'
+            },
+            verifier: {
+                hostname: '192.168.68.93',
+                txPowerInDbm: 33,
+                antennaPort: 1,
+                enableGpiTrigger: true,
+                gpiPort: 1,
+                gpiTriggerState: 'true',
+                enableGpoOutput: true,
+                gpoPort: 1,
+                gpoVerificationTimeoutMs: 1000,
+                readerID: 'Verifier-01'
             },
             parameters: {
-                epcHeader: 'E7',
-                sku: '012345678901',
-                maxCycles: 10000
+                encodingMethod: 'SGTIN96',
+                epcHeader: '30',
+                sku: '7891033079360',
+                partitionValue: 6,
+                itemReference: 0,
+                maxCycles: 10000,
+                enableLock: true,
+                enablePermalock: false
             }
         },
         
@@ -141,35 +152,55 @@ function jobControl() {
                         hostname: this.config.detector.hostname,
                         txPowerInDbm: parseInt(this.config.detector.txPowerInDbm),
                         antennaPort: parseInt(this.config.detector.antennaPort),
+                        includeAntennaPortNumber: true,
+                        includeFastId: true,
+                        includePeakRssi: true,
                         parameters: {
                             enableGpiTrigger: this.config.detector.enableGpiTrigger.toString(),
-                            gpiPort: this.config.detector.gpiPort.toString()
+                            gpiPort: this.config.detector.gpiPort.toString(),
+                            ReaderID: this.config.detector.readerID
                         }
                     } : null,
                     writer: this.config.hasWriter ? {
                         hostname: this.config.writer.hostname,
                         txPowerInDbm: parseInt(this.config.writer.txPowerInDbm),
                         antennaPort: parseInt(this.config.writer.antennaPort),
+                        includeAntennaPortNumber: true,
+                        includeFastId: true,
+                        includePeakRssi: true,
+                        searchMode: this.config.writer.searchMode,
                         parameters: {
                             enableLock: this.config.writer.enableLock.toString(),
-                            enablePermalock: this.config.writer.enablePermalock.toString()
+                            enablePermalock: this.config.writer.enablePermalock.toString(),
+                            ReaderID: this.config.writer.readerID
                         }
                     } : null,
                     verifier: this.config.hasVerifier ? {
                         hostname: this.config.verifier.hostname,
                         txPowerInDbm: parseInt(this.config.verifier.txPowerInDbm),
                         antennaPort: parseInt(this.config.verifier.antennaPort),
+                        includeAntennaPortNumber: true,
+                        includeFastId: true,
+                        includePeakRssi: true,
                         parameters: {
                             enableGpiTrigger: this.config.verifier.enableGpiTrigger.toString(),
                             gpiPort: this.config.verifier.gpiPort.toString(),
+                            gpiTriggerState: this.config.verifier.gpiTriggerState,
                             enableGpoOutput: this.config.verifier.enableGpoOutput.toString(),
-                            gpoPort: this.config.verifier.gpoPort.toString()
+                            gpoPort: this.config.verifier.gpoPort.toString(),
+                            gpoVerificationTimeoutMs: this.config.verifier.gpoVerificationTimeoutMs.toString(),
+                            ReaderID: this.config.verifier.readerID
                         }
                     } : null
                 },
                 parameters: {
                     epcHeader: this.config.parameters.epcHeader,
                     sku: this.config.parameters.sku,
+                    encodingMethod: this.config.parameters.encodingMethod,
+                    partitionValue: this.config.parameters.partitionValue.toString(),
+                    itemReference: this.config.parameters.itemReference.toString(),
+                    enableLock: this.config.parameters.enableLock.toString(),
+                    enablePermalock: this.config.parameters.enablePermalock.toString(),
                     maxCycles: this.config.parameters.maxCycles.toString()
                 }
             };

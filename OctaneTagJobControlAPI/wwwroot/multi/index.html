@@ -94,6 +94,10 @@
                                 <label class="block text-sm text-gray-600 mb-1">GPI Port</label>
                                 <input type="number" x-model="config.detector.gpiPort" class="w-full px-3 py-1 border rounded-lg" min="1" max="4">
                             </div>
+                            <div class="mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">Reader ID</label>
+                                <input type="text" x-model="config.detector.readerID" class="w-full px-3 py-1 border rounded-lg" placeholder="Detector-01">
+                            </div>
                         </div>
                     </div>
                     
@@ -124,6 +128,18 @@
                             <div class="flex items-center mb-2">
                                 <input type="checkbox" x-model="config.writer.enablePermalock" class="mr-2">
                                 <label class="text-sm text-gray-600">Enable Permalock</label>
+                            </div>
+                            <div class="mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">Reader ID</label>
+                                <input type="text" x-model="config.writer.readerID" class="w-full px-3 py-1 border rounded-lg" placeholder="Writer-01">
+                            </div>
+                            <div class="mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">Search Mode</label>
+                                <select x-model="config.writer.searchMode" class="w-full px-3 py-1 border rounded-lg">
+                                    <option value="DualTarget">DualTarget</option>
+                                    <option value="SingleTarget">SingleTarget</option>
+                                    <option value="TagFocus">TagFocus</option>
+                                </select>
                             </div>
                         </div>
                     </div>
@@ -156,6 +172,13 @@
                                 <label class="block text-sm text-gray-600 mb-1">GPI Port</label>
                                 <input type="number" x-model="config.verifier.gpiPort" class="w-full px-3 py-1 border rounded-lg" min="1" max="4">
                             </div>
+                            <div class="mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">GPI Trigger State</label>
+                                <select x-model="config.verifier.gpiTriggerState" class="w-full px-3 py-1 border rounded-lg">
+                                    <option value="true">True (High)</option>
+                                    <option value="false">False (Low)</option>
+                                </select>
+                            </div>
                             <div class="flex items-center mb-2">
                                 <input type="checkbox" x-model="config.verifier.enableGpoOutput" class="mr-2">
                                 <label class="text-sm text-gray-600">Enable GPO Output</label>
@@ -164,23 +187,60 @@
                                 <label class="block text-sm text-gray-600 mb-1">GPO Port</label>
                                 <input type="number" x-model="config.verifier.gpoPort" class="w-full px-3 py-1 border rounded-lg" min="1" max="4">
                             </div>
+                            <div x-show="config.verifier.enableGpoOutput" class="pl-4 mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">GPO Verification Timeout (ms)</label>
+                                <input type="number" x-model="config.verifier.gpoVerificationTimeoutMs" class="w-full px-3 py-1 border rounded-lg" min="100" max="10000" step="100">
+                            </div>
+                            <div class="mb-2">
+                                <label class="block text-sm text-gray-600 mb-1">Reader ID</label>
+                                <input type="text" x-model="config.verifier.readerID" class="w-full px-3 py-1 border rounded-lg" placeholder="Verifier-01">
+                            </div>
                         </div>
                     </div>
                     
-                    <!-- Additional Parameters -->
+                    <!-- Encoding Settings -->
                     <div class="mb-4 p-4 border rounded-lg">
-                        <h4 class="font-medium mb-2">Additional Parameters</h4>
+                        <h4 class="font-medium mb-2">Encoding Settings</h4>
+                        <div class="mb-2">
+                            <label class="block text-sm text-gray-600 mb-1">Encoding Method</label>
+                            <select x-model="config.parameters.encodingMethod" class="w-full px-3 py-1 border rounded-lg">
+                                <option value="BasicWithTidSuffix">BasicWithTidSuffix</option>
+                                <option value="SGTIN96">SGTIN96</option>
+                                <option value="CustomFormat">CustomFormat</option>
+                            </select>
+                        </div>
                         <div class="mb-2">
                             <label class="block text-sm text-gray-600 mb-1">EPC Header</label>
-                            <input type="text" x-model="config.parameters.epcHeader" class="w-full px-3 py-1 border rounded-lg" placeholder="E7">
+                            <input type="text" x-model="config.parameters.epcHeader" class="w-full px-3 py-1 border rounded-lg" placeholder="E7 or 30 for SGTIN96">
                         </div>
                         <div class="mb-2">
-                            <label class="block text-sm text-gray-600 mb-1">SKU</label>
-                            <input type="text" x-model="config.parameters.sku" class="w-full px-3 py-1 border rounded-lg" placeholder="012345678901">
+                            <label class="block text-sm text-gray-600 mb-1">SKU/GTIN</label>
+                            <input type="text" x-model="config.parameters.sku" class="w-full px-3 py-1 border rounded-lg" placeholder="7891033079360">
                         </div>
+                        <div class="mb-2" x-show="config.parameters.encodingMethod === 'SGTIN96'">
+                            <label class="block text-sm text-gray-600 mb-1">Partition Value (0-6)</label>
+                            <input type="number" x-model="config.parameters.partitionValue" class="w-full px-3 py-1 border rounded-lg" min="0" max="6">
+                        </div>
+                        <div class="mb-2" x-show="config.parameters.encodingMethod === 'SGTIN96'">
+                            <label class="block text-sm text-gray-600 mb-1">Item Reference</label>
+                            <input type="number" x-model="config.parameters.itemReference" class="w-full px-3 py-1 border rounded-lg" min="0">
+                        </div>
+                    </div>
+                    
+                    <!-- Test Settings -->
+                    <div class="mb-4 p-4 border rounded-lg">
+                        <h4 class="font-medium mb-2">Test Settings</h4>
                         <div class="mb-2">
                             <label class="block text-sm text-gray-600 mb-1">Max Cycles</label>
                             <input type="number" x-model="config.parameters.maxCycles" class="w-full px-3 py-1 border rounded-lg" min="1" placeholder="10000">
+                        </div>
+                        <div class="flex items-center mb-2">
+                            <input type="checkbox" x-model="config.parameters.enableLock" class="mr-2">
+                            <label class="text-sm text-gray-600">Enable Lock (Global)</label>
+                        </div>
+                        <div class="flex items-center mb-2">
+                            <input type="checkbox" x-model="config.parameters.enablePermalock" class="mr-2">
+                            <label class="text-sm text-gray-600">Enable Permalock (Global)</label>
                         </div>
                     </div>
                 </div>
@@ -327,6 +387,28 @@
                             <tr>
                                 <td class="py-1 font-medium">Verifier:</td>
                                 <td class="py-1 text-right" x-text="getMetric('HasVerifierRole') ? 'Active' : 'Inactive'"></td>
+                            </tr>
+                        </table>
+                    </div>
+                    
+                    <div class="bg-gray-100 p-4 rounded-lg">
+                        <h3 class="text-lg font-medium mb-2">Encoding Information</h3>
+                        <table class="w-full">
+                            <tr>
+                                <td class="py-1 font-medium">Encoding Method:</td>
+                                <td class="py-1 text-right" x-text="getMetric('EncodingMethod', 'BasicWithTidSuffix')"></td>
+                            </tr>
+                            <tr>
+                                <td class="py-1 font-medium">SKU/GTIN:</td>
+                                <td class="py-1 text-right" x-text="getMetric('Sku', '-')"></td>
+                            </tr>
+                            <tr>
+                                <td class="py-1 font-medium">Partition Value:</td>
+                                <td class="py-1 text-right" x-text="getMetric('PartitionValue', '-')"></td>
+                            </tr>
+                            <tr>
+                                <td class="py-1 font-medium">EPC Header:</td>
+                                <td class="py-1 text-right" x-text="getMetric('EpcHeader', '-')"></td>
                             </tr>
                         </table>
                     </div>
