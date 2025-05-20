@@ -1071,31 +1071,202 @@ namespace OctaneTagWritingTest.Helpers
         }
 
         /// <summary>
-        /// Versão estendida do TriggerWriteAndVerify que também registra métricas
+        /// Versão aprimorada de TriggerWriteAndVerify que também registra métricas de performance e inclui rastreamento adicional
         /// </summary>
-        public void TriggerWriteAndVerifyWithMetrics(Tag tag, string newEpcToWrite, ImpinjReader reader, CancellationToken cancellationToken, Stopwatch swWrite, string newAccessPassword, bool encodeOrDefault, ushort targetAntennaPort = 1, bool selfVerify = true, ushort sequenceMaxRetries = 5)
+        /// <param name="tag">O objeto Tag representando a tag RFID</param>
+        /// <param name="newEpcToWrite">O novo EPC a ser gravado na tag</param>
+        /// <param name="reader">O leitor RFID a ser usado para a operação</param>
+        /// <param name="cancellationToken">Token para cancelar a operação</param>
+        /// <param name="swWrite">O cronômetro para medir o tempo de gravação</param>
+        /// <param name="newAccessPassword">A senha de acesso para a tag</param>
+        /// <param name="encodeOrDefault">Se deve usar codificação específica ou valor padrão</param>
+        /// <param name="targetAntennaPort">A porta da antena a ser usada</param>
+        /// <param name="useBlockWrite">Se deve usar operações de escrita em bloco</param>
+        /// <param name="sequenceMaxRetries">Número máximo de retentativas para a sequência</param>
+        /// <returns>Um identificador de sequência para rastreamento da operação</returns>
+        public string TriggerWriteAndVerifyWithMetrics(Tag tag, string newEpcToWrite, ImpinjReader reader, CancellationToken cancellationToken, Stopwatch swWrite, string newAccessPassword, bool encodeOrDefault, ushort targetAntennaPort = 1, bool useBlockWrite = true, ushort sequenceMaxRetries = 5)
         {
-            // Chamar o método original
-            TriggerWriteAndVerify(tag, newEpcToWrite, reader, cancellationToken, swWrite, newAccessPassword, encodeOrDefault, targetAntennaPort, true, sequenceMaxRetries);
+            if (cancellationToken.IsCancellationRequested)
+                return null;
 
-            // Registrar leitura de tag para cálculo de taxa de leitura
-            RecordTagRead();
+            string oldEpc = tag.Epc.ToHexString();
+            // Definir dados EPC com base na escolha de codificação
+            string epcData = encodeOrDefault ? newEpcToWrite : $"B071000000000000000000{processedTids.Count:D2}";
+            string currentTid = tag.Tid.ToHexString();
+
+            // Registrar detalhes para diagnóstico e rastreamento
+            Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Tentando operação robusta para TID {currentTid}: {oldEpc} -> {newEpcToWrite} - RSSI lido {tag.PeakRssiInDbm}");
+
+            // Criar a sequência de operação de tag
+            TagOpSequence seq = new TagOpSequence();
+            seq.SequenceStopTrigger = SequenceTriggerType.None;
+            seq.TargetTag.MemoryBank = MemoryBank.Tid;
+            seq.TargetTag.BitPointer = 0;
+            seq.TargetTag.Data = currentTid;
+
+            // Configurar escrita em bloco se habilitada
+            if (useBlockWrite)
+            {
+                seq.BlockWriteEnabled = true;
+                seq.BlockWriteWordCount = 2;
+                seq.BlockWriteRetryCount = 3;
+            }
+
+            // Configurar retentativas
+            if (sequenceMaxRetries > 0)
+            {
+                seq.SequenceStopTrigger = SequenceTriggerType.ExecutionCount;
+                seq.ExecutionCount = sequenceMaxRetries;
+            }
+            else
+            {
+                seq.SequenceStopTrigger = SequenceTriggerType.None;
+            }
+
+            // Criar operação de escrita
+            TagWriteOp writeOp = new TagWriteOp();
+            writeOp.AccessPassword = TagData.FromHexString(newAccessPassword);
+            writeOp.MemoryBank = MemoryBank.Epc;
+            writeOp.WordPointer = WordPointers.Epc;
+            writeOp.Data = TagData.FromHexString(epcData);
+
+            seq.Ops.Add(writeOp);
+
+            // Se o novo EPC tem comprimento diferente, atualizar os bits PC
+            if (oldEpc.Length != epcData.Length)
+            {
+                ushort newEpcLenWords = (ushort)(newEpcToWrite.Length / 4);
+                ushort newPcBits = PcBits.AdjustPcBits(tag.PcBits, newEpcLenWords);
+                Console.WriteLine($"Adicionando uma operação de escrita para alterar os bits PC de {tag.PcBits.ToString("X4")} para {newPcBits.ToString("X4")}");
+
+                TagWriteOp writePc = new TagWriteOp();
+                writePc.MemoryBank = MemoryBank.Epc;
+                writePc.Data = TagData.FromWord(newPcBits);
+                writePc.WordPointer = WordPointers.PcBits;
+                seq.Ops.Add(writePc);
+            }
+
+            // Registrar o ID da sequência para rastreamento
+            string sequenceId = seq.Id.ToString();
+
+            // Iniciar o cronômetro para medir o tempo de gravação
+            swWrite.Restart();
+
+            // Registrar a sequência para rastreamento
+            try
+            {
+                addedWriteSequences.TryAdd(sequenceId, tag.Tid.ToHexString());
+
+                // Registrar mais métricas aqui
+                RecordTagRead(); // Incrementar contagem de leituras para cálculo de taxa
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Aviso: Não foi possível rastrear a sequência de escrita: {ex.Message}");
+            }
+
+            // Limpar sequências se necessário para evitar sobrecarga
+            CheckAndCleanAccessSequencesOnReader(addedWriteSequences, reader);
+
+            // Adicionar a sequência ao leitor
+            try
+            {
+                reader.AddOpSequence(seq);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - ERRO: erro ao tentar adicionar sequência {sequenceId} para TID {currentTid}: {ex.Message}");
+                try
+                {
+                    Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Limpando sequências de acesso {addedWriteSequences.Count()}...");
+                    reader.DeleteAllOpSequences();
+                    addedWriteSequences.Clear();
+                    reader.AddOpSequence(seq);
+                    Console.WriteLine($" ********************* Sequências do leitor limpas *********************");
+                }
+                catch (Exception innerEx)
+                {
+                    Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Erro ao tentar limpar {addedWriteSequences.Count()} sequências: {innerEx.Message}");
+                    return null; // Retornar null indica falha
+                }
+            }
+
+            Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Adicionada OpSequence de escrita {sequenceId} para TID {currentTid} - EPC atual: {oldEpc} -> EPC esperado {epcData}");
+
+            // Registrar o EPC esperado para esta tag
+            RecordExpectedEpc(currentTid, epcData);
+
+            // Retornar o ID da sequência para referência
+            return sequenceId;
         }
 
         /// <summary>
-        /// Versão estendida do HandleVerifiedTag que também registra métricas
+        /// Versão estendida do método HandleVerifiedTag que também registra métricas detalhadas para análise de performance
         /// </summary>
+        /// <param name="tag">O objeto Tag representando a tag RFID</param>
+        /// <param name="tidHex">O TID da tag em formato hexadecimal</param>
+        /// <param name="expectedEpc">O EPC esperado após a gravação</param>
+        /// <param name="swWrite">O cronômetro usado para medir o tempo de gravação</param>
+        /// <param name="swVerify">O cronômetro usado para medir o tempo de verificação</param>
+        /// <param name="cycleCount">Dicionário para rastreamento de contagem de ciclos por TID</param>
+        /// <param name="currentTargetTag">A tag alvo original (pode ser a mesma que 'tag')</param>
+        /// <param name="chipModel">O modelo do chip da tag</param>
+        /// <param name="logFile">O caminho para o arquivo de log onde registrar os resultados</param>
         public void HandleVerifiedTagWithMetrics(Tag tag, string tidHex, string expectedEpc, Stopwatch swWrite, Stopwatch swVerify, ConcurrentDictionary<string, int> cycleCount, Tag currentTargetTag, string chipModel, string logFile)
         {
-            // Chamar o método original
+            // Chamar o método base para manter a funcionalidade principal
             HandleVerifiedTag(tag, tidHex, expectedEpc, swWrite, swVerify, cycleCount, currentTargetTag, chipModel, logFile);
 
             // Registrar os tempos para métricas
             RecordWriteTime(tidHex, swWrite.ElapsedMilliseconds);
             RecordVerifyTime(tidHex, swVerify.ElapsedMilliseconds);
 
-            // Registrar leitura de tag para cálculo de taxa de leitura
+            // Incrementar contadores para cálculo de taxas
             RecordTagRead();
+
+            // Registrar métricas adicionais que podem ser úteis para análise
+            try
+            {
+                // Registrar informações do modelo do chip se disponíveis
+                if (!string.IsNullOrEmpty(chipModel))
+                {
+                    // Se temos um dicionário de métricas por modelo de chip, atualizar as contagens
+                    // Este é um exemplo - você pode precisar implementar esta estrutura de dados
+                    // _chipModelCounts.AddOrUpdate(chipModel, 1, (key, count) => count + 1);
+                }
+
+                // Registrar informações de RSSI se disponíveis
+                if (tag.IsPeakRssiInDbmPresent)
+                {
+                    double rssi = tag.PeakRssiInDbm;
+                    // Manter uma média móvel do RSSI ou outras estatísticas, se necessário
+                    // _averageRssi = (_averageRssi * (_totalProcessedCount - 1) + rssi) / _totalProcessedCount;
+                }
+
+                // Registrar informações de número de porta da antena, se disponíveis
+                if (tag.IsAntennaPortNumberPresent)
+                {
+                    ushort antennaPort = tag.AntennaPortNumber;
+                    // Rastrear estatísticas por porta de antena, se necessário
+                    // _antennaPortCounts.AddOrUpdate(antennaPort, 1, (key, count) => count + 1);
+                }
+
+                // Monitoramento de ciclos de retentativa
+                if (cycleCount != null && cycleCount.TryGetValue(tidHex, out int cycles))
+                {
+                    // Registrar métricas sobre tentativas necessárias para sucesso
+                    if (cycles > 1)
+                    {
+                        // _multiCycleSuccesses++;
+                        // _totalRetryCount += (cycles - 1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Registrar a exceção, mas não permitir que ela interrompa o fluxo
+                Console.WriteLine($"Warning: Error recording extended metrics: {ex.Message}");
+            }
         }
     }
 }
