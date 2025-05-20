@@ -29,5 +29,12 @@
         /// Item reference for SGTIN-96 encoding
         /// </summary>
         public int ItemReference { get; set; } = 0;
+
+
+        /// <summary>
+        /// Partition value for SGTIN-96 encoding
+        /// </summary>
+        public int CompanyPrefixLength { get; set; } = 6;
+        
     }
 }

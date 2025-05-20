@@ -31,5 +31,36 @@
         public bool EnableGpoOutput { get; set; } = false;
         public ushort GpoPort { get; set; } = 1;
         public int GpoVerificationTimeoutMs { get; set; } = 1000;
+
+        /// <summary>
+        /// EPC header to use
+        /// </summary>
+        public string EpcHeader { get; set; } = "E7";
+
+        /// <summary>
+        /// SKU to use
+        /// </summary>
+        public string Sku { get; set; } = "012345678901";
+
+        /// <summary>
+        /// Method to use for encoding EPCs
+        /// </summary>
+        public string EncodingMethod { get; set; } = "BasicWithTidSuffix";
+
+        /// <summary>
+        /// Partition value for SGTIN-96 encoding
+        /// </summary>
+        public int PartitionValue { get; set; } = 6;
+
+        /// <summary>
+        /// Item reference for SGTIN-96 encoding
+        /// </summary>
+        public int ItemReference { get; set; } = 0;
+
+
+        /// <summary>
+        /// Partition value for SGTIN-96 encoding
+        /// </summary>
+        public int CompanyPrefixLength { get; set; } = 6;
     }
 }

@@ -112,27 +112,41 @@ namespace OctaneTagJobControlAPI.Strategies
         /// </summary>
         private IJobStrategy CreateMultiReaderStrategy(Type strategyType, StrategyConfiguration config, object logger)
         {
+            if (!(config is EnduranceTestConfiguration enduranceTestConfig))
+            {
+                throw new ArgumentException("CreateMultiReaderStrategy requires EncodingStrategyConfiguration");
+            }
             // Handle the case where logger may be null
             if (logger == null)
             {
                 return (IJobStrategy)Activator.CreateInstance(
                     strategyType,
-                    config.ReaderSettings.Detector?.Hostname,
-                    config.ReaderSettings.Writer?.Hostname,
-                    config.ReaderSettings.Verifier?.Hostname,
-                    config.LogFilePath,
+                    enduranceTestConfig.ReaderSettings.Detector?.Hostname,
+                    enduranceTestConfig.ReaderSettings.Writer?.Hostname,
+                    enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
+                    enduranceTestConfig.LogFilePath,
                     ConvertReaderSettings(config.ReaderSettings),
+                    enduranceTestConfig.EpcHeader,
+                    enduranceTestConfig.Sku,
+                    enduranceTestConfig.EncodingMethod,
+                    enduranceTestConfig.CompanyPrefixLength,
+                    enduranceTestConfig.ItemReference,
                     _serviceProvider);
             }
 
             // Include logger in the constructor parameters
             return (IJobStrategy)Activator.CreateInstance(
                 strategyType,
-                config.ReaderSettings.Detector?.Hostname,
-                config.ReaderSettings.Writer?.Hostname,
-                config.ReaderSettings.Verifier?.Hostname,
-                config.LogFilePath,
-                ConvertReaderSettings(config.ReaderSettings),
+                    enduranceTestConfig.ReaderSettings.Detector?.Hostname,
+                    enduranceTestConfig.ReaderSettings.Writer?.Hostname,
+                    enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
+                    enduranceTestConfig.LogFilePath,
+                    ConvertReaderSettings(config.ReaderSettings),
+                    enduranceTestConfig.EpcHeader,
+                    enduranceTestConfig.Sku,
+                    enduranceTestConfig.EncodingMethod,
+                    enduranceTestConfig.CompanyPrefixLength,
+                    enduranceTestConfig.ItemReference,
                 _serviceProvider,
                 logger);
         }

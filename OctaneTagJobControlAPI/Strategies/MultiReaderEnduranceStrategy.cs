@@ -100,7 +100,19 @@ namespace OctaneTagJobControlAPI.Strategies
             int companyPrefixLength = 6,
             int itemReference = 0,
             IServiceProvider serviceProvider = null)
-            : base(detectorHostname, writerHostname, verifierHostname, logFile, readerSettings, serviceProvider)
+            : base(
+                   detectorHostname,
+            writerHostname,
+            verifierHostname,
+            logFile,
+            readerSettings,
+            epcHeader,
+            sku,
+            encodingMethod,
+            companyPrefixLength,
+            itemReference,
+            serviceProvider
+                  )
         {
             _epcHeader = epcHeader;
             _sku = sku;

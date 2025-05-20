@@ -35,6 +35,11 @@ namespace OctaneTagJobControlAPI.Strategies.Base
             string verifierHostname,
             string logFile,
             Dictionary<string, ReaderSettings> settings,
+            string epcHeader = "E7",
+            string sku = null,
+            string encodingMethod = "BasicWithTidSuffix",
+            int companyPrefixLength = 6,
+            int itemReference = 0,
             IServiceProvider serviceProvider = null,
             ILogger logger = null)
             : base(logFile, settings, serviceProvider, logger)
