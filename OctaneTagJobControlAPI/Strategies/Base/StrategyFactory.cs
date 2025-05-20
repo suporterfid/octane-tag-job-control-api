@@ -116,6 +116,7 @@ namespace OctaneTagJobControlAPI.Strategies
             {
                 throw new ArgumentException("CreateMultiReaderStrategy requires EncodingStrategyConfiguration");
             }
+
             // Handle the case where logger may be null
             if (logger == null)
             {
@@ -137,16 +138,16 @@ namespace OctaneTagJobControlAPI.Strategies
             // Include logger in the constructor parameters
             return (IJobStrategy)Activator.CreateInstance(
                 strategyType,
-                    enduranceTestConfig.ReaderSettings.Detector?.Hostname,
-                    enduranceTestConfig.ReaderSettings.Writer?.Hostname,
-                    enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
-                    enduranceTestConfig.LogFilePath,
-                    ConvertReaderSettings(config.ReaderSettings),
-                    enduranceTestConfig.EpcHeader,
-                    enduranceTestConfig.Sku,
-                    enduranceTestConfig.EncodingMethod,
-                    enduranceTestConfig.CompanyPrefixLength,
-                    enduranceTestConfig.ItemReference,
+                enduranceTestConfig.ReaderSettings.Detector?.Hostname,
+                enduranceTestConfig.ReaderSettings.Writer?.Hostname,
+                enduranceTestConfig.ReaderSettings.Verifier?.Hostname,
+                enduranceTestConfig.LogFilePath,
+                ConvertReaderSettings(config.ReaderSettings),
+                enduranceTestConfig.EpcHeader,
+                enduranceTestConfig.Sku,
+                enduranceTestConfig.EncodingMethod,
+                enduranceTestConfig.CompanyPrefixLength,
+                enduranceTestConfig.ItemReference,
                 _serviceProvider,
                 logger);
         }
