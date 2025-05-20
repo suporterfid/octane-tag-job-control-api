@@ -1,4 +1,7 @@
 ﻿using EpcListGenerator;
+using Impinj.OctaneSdk;
+using Impinj.TagUtils;
+using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using System;
 using System.Collections.Concurrent;
@@ -22,9 +25,17 @@ public sealed class EpcListManager
     private readonly object lockObj = new object();
     private string lastEpc = "000000000000000000000000";
     private long currentSerialNumber = 1;
-    private string epcHeader = "B200";
-    private string epcPlainItemCode = "99999999999999";
-    private long quantity = 1;
+    private string _epcHeader = "B200";
+    private string _epcPlainItemCode = "99999999999999";
+    private long _quantity = 1;
+    private int _companyPrefixLength;
+
+    // Encoding configuration
+    private EpcEncodingMethod _encodingMethod;
+    private int _partitionValue;
+    private int _companyPrefix;
+    private int _itemReference;
+    private string _baseEpcHex = null;
 
     // Thread-safe dictionary to ensure unique EPC generation using tag TID as key.
     private ConcurrentDictionary<string, string> generatedEpcsByTid = new ConcurrentDictionary<string, string>();
@@ -52,7 +63,7 @@ public sealed class EpcListManager
         lock (lockObj)
         {
             // Take the first 14 digits from configured header and item code
-            string prefix = epcHeader + epcPlainItemCode;
+            string prefix = _epcHeader + _epcPlainItemCode;
             if (prefix.Length != 14)
                 throw new InvalidOperationException("Combined header and item code must be 14 characters.");
 
@@ -119,11 +130,14 @@ public sealed class EpcListManager
     /// <param name="header">The EPC header.</param>
     /// <param name="code">The plain item code.</param>
     /// <param name="epcQuantity">The number of EPCs to generate (default is 1).</param>
-    public void InitEpcData(string header, string code, long epcQuantity = 1)
+    public void InitEpcData(string header, string code, long epcQuantity = 1, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
     {
-        epcHeader = header;
-        epcPlainItemCode = code;
-        quantity = epcQuantity;
+        _epcHeader = header;
+        _epcPlainItemCode = code;
+        _quantity = epcQuantity;
+        _companyPrefixLength = companyPrefixLength;
+        _encodingMethod = encodingMethod;
+
     }
 
     /// <summary>
@@ -148,6 +162,73 @@ public sealed class EpcListManager
         }
     }
 
+    public string GenerateEpc(string tid, string gtin, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
+    {
+        if (string.IsNullOrEmpty(_epcPlainItemCode))
+        {
+            _epcPlainItemCode = gtin;
+        }
+
+        switch (encodingMethod)
+        {
+            case EpcEncodingMethod.SGTIN96:
+                try
+                {
+                    if (gtin.Length < 13)
+                    {
+                        gtin = gtin.PadLeft(13, '0');
+                    }
+
+                    if (!gtin.Equals(_epcPlainItemCode, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _epcPlainItemCode = gtin;
+                        var sgtin96 = Sgtin96.FromGTIN(gtin, companyPrefixLength);
+                        _baseEpcHex = sgtin96.ToEpc().Substring(0, 14);
+                    }
+
+
+                    string serialStr = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid;
+
+                    //if (ulong.TryParse(serialStr, System.Globalization.NumberStyles.HexNumber, null, out ulong serialNumber))
+                    //{
+                    //    serialNumber = Math.Min(serialNumber, 274877906943);
+                    //}
+                    //else
+                    //{
+                    //    serialNumber = (ulong)Math.Abs(tid.GetHashCode()) % 274877906943;
+                    //}
+
+                    //sgtin96.SerialNumber = serialNumber;
+                    //string newEpc = sgtin96.ToEpc();
+                    string newEpc = GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+
+                    Console.WriteLine($"Generated SGTIN-96 EPC for TID {tid}: {newEpc}");
+                    return newEpc;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error generating SGTIN-96 EPC: {ex.Message}. Falling back to basic encoding.");
+                    return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+                }
+
+            case EpcEncodingMethod.CustomFormat:
+                Console.WriteLine("CustomFormat encoding not yet implemented, falling back to basic encoding.");
+                return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+
+            case EpcEncodingMethod.BasicWithTidSuffix:
+            default:
+                return GenerateBasicEpcWithTidSuffix(_baseEpcHex, tid);
+        }
+    }
+
+    public string GenerateBasicEpcWithTidSuffix(string partialHexEpc, string tid)
+    {
+        string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
+        string newEpc = partialHexEpc + tidSuffix;
+        Console.WriteLine($"Generated basic EPC for TID {tid}: {newEpc}");
+        return newEpc;
+    }
+
     /// <summary>
     /// Generates a unique EPC based on the current serial number.
     /// Ensures thread safety during EPC generation.
@@ -158,14 +239,16 @@ public sealed class EpcListManager
         lock (lockObj)
         {
             // Generate the EPC list using the current serial number.
-            string createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
-                tid, epcHeader, epcPlainItemCode);
+            string createdEpcToApply =  GenerateEpc(tid, _epcPlainItemCode, _companyPrefixLength, _encodingMethod);
+            //string createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
+            //    tid, _epcHeader, _epcPlainItemCode);
 
             // If the generated EPC already exists, generate a new EPC with the next serial number.
             if (TagOpController.Instance.GetExistingEpc(createdEpcToApply))
             {
-                createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
-                    tid, epcHeader, epcPlainItemCode);
+                createdEpcToApply = GenerateEpc(tid, _epcPlainItemCode, _companyPrefixLength, _encodingMethod);
+                //createdEpcToApply = EpcListGeneratorHelper.Instance.GenerateEpcFromTid(
+                //    tid, _epcHeader, _epcPlainItemCode);
             }
 
             Console.WriteLine($"Returning next EPC created: {createdEpcToApply}: SN = {currentSerialNumber}");

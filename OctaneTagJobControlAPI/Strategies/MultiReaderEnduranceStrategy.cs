@@ -10,6 +10,7 @@ using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using Org.LLRP.LTK.LLRPV1.Impinj;
 using OctaneTagJobControlAPI.Models;
+using Impinj.TagUtils;
 
 namespace OctaneTagJobControlAPI.Strategies
 {
@@ -34,6 +35,14 @@ namespace OctaneTagJobControlAPI.Strategies
         private Timer successCountTimer;
         private JobExecutionStatus status = new();
         private readonly Stopwatch runTimer = new();
+
+        // Encoding configuration
+        private readonly string _sku;
+        private readonly string _epcHeader;
+        private readonly EpcEncodingMethod _encodingMethod;
+        private readonly int _companyPrefixLength;
+        private readonly int _itemReference;
+        private string _baseEpcHex = null;
 
         // Lock/Permalock configuration
         private bool enableLock = false;
@@ -85,9 +94,19 @@ namespace OctaneTagJobControlAPI.Strategies
             string verifierHostname,
             string logFile,
             Dictionary<string, ReaderSettings> readerSettings,
+            string epcHeader = "E7",
+            string sku = null,
+            string encodingMethod = "BasicWithTidSuffix",
+            int companyPrefixLength = 6,
+            int itemReference = 0,
             IServiceProvider serviceProvider = null)
             : base(detectorHostname, writerHostname, verifierHostname, logFile, readerSettings, serviceProvider)
         {
+            _epcHeader = epcHeader;
+            _sku = sku;
+            _encodingMethod = Enum.TryParse(encodingMethod, true, out EpcEncodingMethod method) ? method : EpcEncodingMethod.BasicWithTidSuffix;
+            _itemReference = itemReference;
+            _companyPrefixLength = companyPrefixLength; 
             status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
 
@@ -853,8 +872,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 // Generate a new EPC if one is not already recorded using the detector logic
                 var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
                 if (string.IsNullOrEmpty(expectedEpc))
-                {
-                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
+                {            
+                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Detector: Assigned new EPC for TID {tidHex}: {expectedEpc}");
 
@@ -914,7 +933,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
                     Console.WriteLine($"Writer: New target TID found: {tidHex} Chip {TagOpController.Instance.GetChipModel(tag)}");
-                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
+                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Writer: New tag found. TID: {tidHex}. Assigning new EPC: {epcHex} -> {expectedEpc}");
 
@@ -970,7 +989,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 {
                     // When operating as verifier only, we might see tags that detector/writer processed
                     // We'll use a fallback approach to handle this case
-                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
+                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Verifier (fallback detection): TID {tidHex}. Current EPC: {epcHex}, Expected: {expectedEpc}");
 
@@ -1190,7 +1209,7 @@ namespace OctaneTagJobControlAPI.Strategies
                     var expectedEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
                     if (string.IsNullOrEmpty(expectedEpc))
                     {
-                        expectedEpc = TagOpController.Instance.GetNextEpcForTag(readResult.Tag.Epc.ToHexString(), tidHex);
+                        expectedEpc = TagOpController.Instance.GetNextEpcForTag(readResult.Tag.Epc.ToHexString(), tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     }
                     var verifiedEpc = readResult.Tag.Epc?.ToHexString() ?? "N/A";
                     var success = verifiedEpc.Equals(expectedEpc, StringComparison.InvariantCultureIgnoreCase);

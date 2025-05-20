@@ -11,6 +11,8 @@ using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
 using OctaneTagJobControlAPI.Models;
+using Impinj.TagUtils;
+using System.Reflection.PortableExecutable;
 
 namespace OctaneTagJobControlAPI.Strategies
 {
@@ -23,6 +25,14 @@ namespace OctaneTagJobControlAPI.Strategies
         StrategyCapability.Reading | StrategyCapability.Writing)]
     public class SpeedTestStrategy : SingleReaderStrategyBase
     {
+        // Encoding configuration
+        private readonly string _sku;
+        private readonly string _epcHeader;
+        private readonly EpcEncodingMethod _encodingMethod;
+        private readonly int _companyPrefixLength;
+        private readonly int _itemReference;
+        private string _baseEpcHex = null;
+
         private readonly ConcurrentDictionary<string, Stopwatch> _writeTimers = new();
         private readonly Stopwatch _runTimer = new();
         private JobExecutionStatus _status = new();
@@ -37,9 +47,19 @@ namespace OctaneTagJobControlAPI.Strategies
             string hostname,
             string logFile,
             Dictionary<string, ReaderSettings> readerSettings,
+            string epcHeader = "E7",
+            string sku = null,
+            string encodingMethod = "BasicWithTidSuffix",
+            int companyPrefixLength = 6,
+            int itemReference = 0,
             IServiceProvider serviceProvider = null)
             : base(hostname, logFile, readerSettings, serviceProvider)
         {
+            _epcHeader = epcHeader;
+            _sku = sku;
+            _encodingMethod = Enum.TryParse(encodingMethod, true, out EpcEncodingMethod method) ? method : EpcEncodingMethod.BasicWithTidSuffix;
+            _itemReference = itemReference;
+            _companyPrefixLength = companyPrefixLength;
             _status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
         }
@@ -129,7 +149,7 @@ namespace OctaneTagJobControlAPI.Strategies
 
                 if (string.IsNullOrEmpty(expectedEpc))
                 {
-                    expectedEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
+                    string newEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                     TagOpController.Instance.RecordExpectedEpc(tidHex, expectedEpc);
                     Console.WriteLine($"Assigning new EPC to TID {tidHex}: {epcHex} -> {expectedEpc}");
 

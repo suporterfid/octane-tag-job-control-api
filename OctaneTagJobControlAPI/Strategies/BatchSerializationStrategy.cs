@@ -12,6 +12,7 @@ using OctaneTagJobControlAPI.Strategies.Base.Configuration;
 using OctaneTagJobControlAPI.Models;
 using OctaneTagJobControlAPI.Strategies.Base;
 using OctaneTagWritingTest.Helpers;
+using System.Security.Cryptography;
 
 namespace OctaneTagJobControlAPI.Strategies
 {
@@ -24,6 +25,15 @@ namespace OctaneTagJobControlAPI.Strategies
         StrategyCapability.Reading | StrategyCapability.Writing | StrategyCapability.BatchProcessing | StrategyCapability.Permalock)]
     public class BatchSerializationStrategy : SingleReaderStrategyBase
     {
+        // Encoding configuration
+        private readonly string _sku;
+        private readonly string _epcHeader;
+        private readonly EpcEncodingMethod _encodingMethod;
+        private readonly int _partitionValue;
+        private readonly int _companyPrefixLength;
+        private readonly int _itemReference;
+        private string _baseEpcHex = null;
+
         // Collection to queue tags for batch processing
         private readonly ConcurrentQueue<Tag> _tagsQueue = new ConcurrentQueue<Tag>();
 
@@ -56,9 +66,19 @@ namespace OctaneTagJobControlAPI.Strategies
             string hostname,
             string logFile,
             Dictionary<string, ReaderSettings> readerSettings,
+            string epcHeader = "E7",
+            string sku = null,
+            string encodingMethod = "BasicWithTidSuffix",
+            int companyPrefixLength = 6,
+            int itemReference = 0,
             IServiceProvider serviceProvider = null)
             : base(hostname, logFile, readerSettings, serviceProvider)
         {
+            _epcHeader = epcHeader;
+            _sku = sku;
+            _encodingMethod = Enum.TryParse(encodingMethod, true, out EpcEncodingMethod method) ? method : EpcEncodingMethod.BasicWithTidSuffix;
+            _itemReference = itemReference;
+            _companyPrefixLength = companyPrefixLength;
             _status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
         }
@@ -239,7 +259,8 @@ namespace OctaneTagJobControlAPI.Strategies
             var newEpc = TagOpController.Instance.GetExpectedEpc(tidHex);
             if (string.IsNullOrEmpty(newEpc))
             {
-                newEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex);
+                
+                newEpc = TagOpController.Instance.GetNextEpcForTag(epcHex, tidHex, _sku, _companyPrefixLength, _encodingMethod);
                 TagOpController.Instance.RecordExpectedEpc(tidHex, newEpc);
             }
 

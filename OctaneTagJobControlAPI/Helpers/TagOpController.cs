@@ -1,4 +1,6 @@
 ﻿using Impinj.OctaneSdk;
+using Impinj.TagUtils;
+using OctaneTagJobControlAPI.Strategies.Base;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -10,7 +12,17 @@ using static Impinj.OctaneSdk.ImpinjReader;
 namespace OctaneTagWritingTest.Helpers
 {
     public sealed partial  class TagOpController
-    { // Dictionary: key = TID, value = expected EPC.
+    {
+        // Encoding configuration
+        private string _gtin;
+        private string _epcHeader;
+        private EpcEncodingMethod _encodingMethod;
+        private int _partitionValue;
+        private int _companyPrefix;
+        private int _itemReference;
+        private string _baseEpcHex = null;
+
+        // Dictionary: key = TID, value = expected EPC.
         private Dictionary<string, string> expectedEpcByTid = new Dictionary<string, string>();
         // Dictionaries for recording operation results.
         private ConcurrentDictionary<string, string> operationResultByTid = new ConcurrentDictionary<string, string>();
@@ -517,7 +529,7 @@ namespace OctaneTagWritingTest.Helpers
             }
         }
 
-        public string GetNextEpcForTag(string epc, string tid)
+        public string GetNextEpcForTag(string epc, string tid, string gtin, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
         {
             const int maxRetries = 5;
             int retryCount = 0;

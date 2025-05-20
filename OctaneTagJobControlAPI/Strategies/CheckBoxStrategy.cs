@@ -21,12 +21,7 @@ namespace OctaneTagJobControlAPI.Strategies
         StrategyCapability.Reading | StrategyCapability.Writing | StrategyCapability.Verification | StrategyCapability.Encoding)]
     public class CheckBoxStrategy : SingleReaderStrategyBase
     {
-        public enum EpcEncodingMethod
-        {
-            BasicWithTidSuffix,
-            SGTIN96,
-            CustomFormat
-        }
+       
 
         private const int ReadDurationSeconds = 10;
         private const int WriteTimeoutSeconds = 20;
@@ -35,7 +30,9 @@ namespace OctaneTagJobControlAPI.Strategies
         private readonly string _sku;
         private readonly string _epcHeader;
         private readonly EpcEncodingMethod _encodingMethod;
-        private readonly int _partitionValue;
+        //private readonly int _partitionValue;
+        private readonly int _companyPrefix;
+        private readonly int _companyPrefixLength;
         private readonly int _itemReference;
 
         // Thread-safe dictionary to track all tag operations
@@ -64,7 +61,8 @@ namespace OctaneTagJobControlAPI.Strategies
             string epcHeader = "E7",
             string sku = null,
             string encodingMethod = "BasicWithTidSuffix",
-            int partitionValue = 6,
+            int companyPrefix = 0,
+            int companyPrefixLength = 6,
             int itemReference = 0,
             IServiceProvider serviceProvider = null)
             : base(hostname, logFile, readerSettings, serviceProvider)
@@ -87,7 +85,8 @@ namespace OctaneTagJobControlAPI.Strategies
                 Console.WriteLine("Warning: SKU should be 12 digits for BasicWithTidSuffix encoding");
             }
 
-            _partitionValue = Math.Clamp(partitionValue, 0, 6);
+            _companyPrefix = companyPrefix;
+            _companyPrefixLength = Math.Clamp(companyPrefixLength, 6, 12);
             _itemReference = itemReference;
             _status.CurrentOperation = "Initialized";
             TagOpController.Instance.CleanUp();
@@ -331,7 +330,7 @@ namespace OctaneTagJobControlAPI.Strategies
                 
                 var tagOperation = kvp.Value;
 
-                string newEpc = GenerateEpc(tagOperation.Tag);
+                string newEpc = TagOpController.Instance.GetNextEpcForTag(tagOperation.Tag.Epc.ToString(), tagOperation.Tag.Tid.ToString(), _sku, _companyPrefixLength, _encodingMethod);
                 TagOpController.Instance.RecordExpectedEpc(tagOperation.TID, newEpc);
 
                 TagOpController.Instance.TriggerWriteAndVerify(
@@ -353,62 +352,9 @@ namespace OctaneTagJobControlAPI.Strategies
             globalWriteTimer.Stop();
         }
 
-        private string GenerateEpc(Tag tag)
-        {
-            string tid = tag.Tid.ToHexString();
+        
 
-            switch (_encodingMethod)
-            {
-                case EpcEncodingMethod.SGTIN96:
-                    try
-                    {
-                        string gtin = _sku;
-                        if (gtin.Length < 13)
-                        {
-                            gtin = gtin.PadLeft(13, '0');
-                        }
-
-                        var sgtin96 = Sgtin96.FromGTIN(gtin, _partitionValue);
-                        string serialStr = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid;
-
-                        if (ulong.TryParse(serialStr, System.Globalization.NumberStyles.HexNumber, null, out ulong serialNumber))
-                        {
-                            serialNumber = Math.Min(serialNumber, 274877906943);
-                        }
-                        else
-                        {
-                            serialNumber = (ulong)Math.Abs(tid.GetHashCode()) % 274877906943;
-                        }
-
-                        sgtin96.SerialNumber = serialNumber;
-                        string newEpc = sgtin96.ToEpc();
-
-                        Console.WriteLine($"Generated SGTIN-96 EPC for TID {tid}: {newEpc}");
-                        return newEpc;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error generating SGTIN-96 EPC: {ex.Message}. Falling back to basic encoding.");
-                        return GenerateBasicEpcWithTidSuffix(tid);
-                    }
-
-                case EpcEncodingMethod.CustomFormat:
-                    Console.WriteLine("CustomFormat encoding not yet implemented, falling back to basic encoding.");
-                    return GenerateBasicEpcWithTidSuffix(tid);
-
-                case EpcEncodingMethod.BasicWithTidSuffix:
-                default:
-                    return GenerateBasicEpcWithTidSuffix(tid);
-            }
-        }
-
-        private string GenerateBasicEpcWithTidSuffix(string tid)
-        {
-            string tidSuffix = tid.Length >= 10 ? tid.Substring(tid.Length - 10) : tid.PadLeft(10, '0');
-            string newEpc = _epcHeader + _sku + tidSuffix;
-            Console.WriteLine($"Generated basic EPC for TID {tid}: {newEpc}");
-            return newEpc;
-        }
+        
 
         private void OnTagsReported(object sender, TagReport report)
         {
