@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using Impinj.TagUtils;
+using OctaneTagWritingTest.Helpers;
 
 namespace EpcListGenerator
 {
@@ -174,28 +176,13 @@ namespace EpcListGenerator
 			if (totalWords <= 2)
 				throw new ArgumentException("TID does not contain enough words to extract a serial.", nameof(tidHexString));
 
-			// Skip the first 2 words.
-			int serialStartIndex = 2;
-			int serialLengthInChars = (totalWords - serialStartIndex) * 4; // total hex digits in remaining words
+            string serialHex = tidHexString.Substring(14);
 
-			string serialHex = tidHexString.Substring(serialStartIndex * 4);
-			// Adjust the serial portion to be exactly 16 characters.
-			if (serialHex.Length > 16)
-			{
-				// Take the rightmost 16 characters.
-				serialHex = serialHex.Substring(serialHex.Length - 16, 16);
-			}
-			else if (serialHex.Length < 16)
-			{
-				// Left-pad with zeros.
-				serialHex = serialHex.PadLeft(16, '0');
-			}
-
-			// Validate EPC header and middle part.
-			if (string.IsNullOrWhiteSpace(epcHeader) || epcHeader.Length != 4)
-				throw new ArgumentException("EPC header must be exactly 4 characters long.", nameof(epcHeader));
-			if (string.IsNullOrWhiteSpace(middlePart) || middlePart.Length != 4)
-				throw new ArgumentException("EPC middle part must be exactly 4 characters long.", nameof(middlePart));
+            using (var parser = new TagTidParser(tidHexString))
+            {
+                serialHex = parser.Get40BitSerialHex();
+                Console.WriteLine($"Serial extraído: [[[[[[[[[[[[[[[[[[[{serialHex}]]]]]]]]]]]]]]]]]]]");
+            }
 
 			// Construct the final EPC.
 			string epc = epcHeader + middlePart + serialHex;

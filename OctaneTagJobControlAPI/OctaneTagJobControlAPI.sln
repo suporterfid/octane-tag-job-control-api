@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TagUtils", "..\TagUtils\Tag
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EpcListGenerator", "..\EpcListGenerator\EpcListGenerator.csproj", "{55F4667B-6F0D-4876-8AAF-12D8ADEB56B2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OctaneTagJobControlAPI.Tests", "..\OctaneTagJobControlAPI.Tests\OctaneTagJobControlAPI.Tests.csproj", "{63DD3967-A0F7-207E-1284-D56540590101}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,8 +29,15 @@ Global
 		{55F4667B-6F0D-4876-8AAF-12D8ADEB56B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{55F4667B-6F0D-4876-8AAF-12D8ADEB56B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{55F4667B-6F0D-4876-8AAF-12D8ADEB56B2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{63DD3967-A0F7-207E-1284-D56540590101}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{63DD3967-A0F7-207E-1284-D56540590101}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{63DD3967-A0F7-207E-1284-D56540590101}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{63DD3967-A0F7-207E-1284-D56540590101}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B54DFD04-6A86-4504-BF65-A4390C64DA26}
 	EndGlobalSection
 EndGlobal

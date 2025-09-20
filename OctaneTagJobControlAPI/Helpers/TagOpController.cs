@@ -1,43 +1,63 @@
 ﻿using Impinj.OctaneSdk;
-using Impinj.TagUtils;
-using OctaneTagJobControlAPI.Strategies.Base;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
-using static Impinj.OctaneSdk.ImpinjReader;
 
 namespace OctaneTagWritingTest.Helpers
 {
-    public sealed partial  class TagOpController
+    public sealed class TagOpController
     {
-        // Encoding configuration
-        private string _gtin;
-        private string _epcHeader;
-        private EpcEncodingMethod _encodingMethod;
-        private int _partitionValue;
-        private int _companyPrefix;
-        private int _itemReference;
-        private string _baseEpcHex = null;
-
         // Dictionary: key = TID, value = expected EPC.
-        private Dictionary<string, string> expectedEpcByTid = new Dictionary<string, string>();
-        // Dictionaries for recording operation results.
-        private ConcurrentDictionary<string, string> operationResultByTid = new ConcurrentDictionary<string, string>();
-        private ConcurrentDictionary<string, string> operationResultWithSuccessByTid = new ConcurrentDictionary<string, string>();
-        /// <summary>
-        /// Dictionary to cache tag lock status for previously checked tags
-        /// </summary>
-        private readonly ConcurrentDictionary<string, TagLockStatus> _tagLockStatusCache = new ConcurrentDictionary<string, TagLockStatus>();
+        private readonly Dictionary<string, string> expectedEpcByTid = new Dictionary<string, string>();
+        // Dictionaries for recording operation results
+        private readonly ConcurrentDictionary<string, string> operationResultByTid = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> operationResultWithSuccessByTid = new ConcurrentDictionary<string, string>();
 
         private readonly object lockObj = new object();
-        private HashSet<string> processedTids = new HashSet<string>();
-        private ConcurrentDictionary<string, string> addedWriteSequences = new ConcurrentDictionary<string, string>();
-        private ConcurrentDictionary<string, string> addedReadSequences = new ConcurrentDictionary<string, string>();
-        // Private constructor for singleton.
-        private TagOpController() { }
+        private readonly HashSet<string> processedTids = new HashSet<string>();
+        private readonly ConcurrentDictionary<string, string> addedWriteSequences = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> addedReadSequences = new ConcurrentDictionary<string, string>();
+
+        // Fields for serial number generation
+        private readonly ConcurrentDictionary<string, string> serialByTid;
+        private readonly SerialGenerator serialGenerator;
+
+        // Private constructor for singleton
+        private TagOpController()
+        {
+            serialByTid = new ConcurrentDictionary<string, string>();
+            serialGenerator = new SerialGenerator();
+        }
+
+        /// <summary>
+        /// Gets an existing serial for a TID or generates a new one if it doesn't exist
+        /// </summary>
+        /// <param name="tid">The TID to get or generate a serial for</param>
+        /// <returns>A unique serial number</returns>
+        public string GetOrGenerateSerial(string tid)
+        {
+            return serialByTid.GetOrAdd(tid, _ =>
+            {
+                try
+                {
+                    return serialGenerator.GenerateUniqueSerial();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Console.WriteLine($"Failed to generate unique serial: {ex.Message}");
+                    // Fallback to using a timestamp-based serial if random generation fails
+                    string fallbackSerial = DateTime.Now.Ticks.ToString().Substring(0, 10);
+                    while (serialGenerator.IsSerialUsed(fallbackSerial))
+                    {
+                        fallbackSerial = DateTime.Now.Ticks.ToString().Substring(0, 10);
+                    }
+                    return fallbackSerial;
+                }
+            });
+        }
 
         // Lazy singleton instance.
         private static readonly Lazy<TagOpController> _instance = new Lazy<TagOpController>(() => new TagOpController());
@@ -48,398 +68,6 @@ namespace OctaneTagWritingTest.Helpers
         public bool IsLocalTargetTidSet { get; private set; }
 
         private readonly object fileLock = new object();
-
-        // Generic Monza/regular tags (Word 4 of Reserved Memory)
-        private const int KillPasswordLockBit = 31;
-        private const int KillPasswordPermalockBit = 30;
-        private const int AccessPasswordLockBit = 29;
-        private const int AccessPasswordPermalockBit = 28;
-        private const int EPCLockBit = 27;
-        private const int EPCPermalockBit = 26;
-        private const int UserMemoryLockBit = 25;
-        private const int UserMemoryPermalockBit = 24;
-        private const int KillBit = 20;
-
-        // M7xx series (different bit positions)
-        private const int M7xxKillPasswordLockBit = 29;
-        private const int M7xxKillPasswordPermalockBit = 28;
-        private const int M7xxKillBit = 18;
-
-        // Monza R6 (Word 5 of Reserved Memory for some bits)
-        private const int MR6EPCLockBit = 14;
-        private const int MR6PermalockBit = 14;
-
-        // TID identifiers for different tag types
-        private const string MR6_TID_Identifier = "E2801160";
-        private const string M730_TID_Identifier = "E2801191";
-        private const string M750_TID_Identifier = "E2801190";
-        private const string M770_TID_Identifier = "E28011A0";
-        private const string M775_TID_Identifier = "E2C011A2";
-        private const string M780_TID_Identifier = "E28011C0";
-        private const string M781_TID_Identifier = "E28011C1";
-        private const string M830_M850_TID_Identifier = "E28011B0";
-
-        public enum TagType
-        {
-            GenericMonza = 1,
-            MonzaR6 = 2,
-            M7xx = 3
-        }
-
-        public enum LockState
-        {
-            Unlocked,
-            Locked,
-            Permalocked
-        }
-
-        public class TagLockStatus
-        {
-            public LockState KillPasswordLockState { get; set; }
-            public LockState AccessPasswordLockState { get; set; }
-            public LockState EpcLockState { get; set; }
-            public LockState UserMemoryLockState { get; set; }
-            public bool IsKilled { get; set; }
-        }
-
-    /// <summary>
-    /// Determines the tag type based on its TID
-    /// </summary>
-    public string GetChipModelName(Tag tag)
-    {
-        string chipModelName = "GenericIC";
-        if (tag.IsFastIdPresent)
-                chipModelName = tag.ModelDetails.ModelName.ToString();
-
-            return chipModelName;
-    }
-     /// <summary>
-     /// Determines the tag type based on its TID
-     /// </summary>
-    public TagType GetChipModel(Tag tag)
-    {
-        string chipModel = "";
-        if (tag.IsFastIdPresent)
-            chipModel = tag.ModelDetails.ModelName.ToString();
-
-        if (tag == null || tag.Tid == null)
-            return TagType.GenericMonza;
-
-        string tidHex = tag.Tid.ToHexString();
-        
-        if (tidHex.StartsWith(MR6_TID_Identifier))
-            return TagType.MonzaR6;
-        else if (tidHex.StartsWith(M730_TID_Identifier) ||
-                 tidHex.StartsWith(M750_TID_Identifier) ||
-                 tidHex.StartsWith(M770_TID_Identifier) ||
-                 tidHex.StartsWith(M775_TID_Identifier) ||
-                 tidHex.StartsWith(M780_TID_Identifier) ||
-                 tidHex.StartsWith(M781_TID_Identifier) ||
-                 tidHex.StartsWith(M830_M850_TID_Identifier))
-            return TagType.M7xx;
-        else
-            return TagType.GenericMonza;
-    }
-
-        /// <summary>
-        /// Checks if a tag with the given TID is locked in any way
-        /// </summary>
-        /// <param name="tid">TID of the tag to check</param>
-        /// <returns>True if the tag has any memory bank locked or permalocked, false otherwise</returns>
-        public bool IsTagLocked(string tid)
-        {
-            if (string.IsNullOrEmpty(tid))
-                return false;
-
-            // Check if we have cached lock status for this TID
-            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
-            {
-                // Return true if any memory bank is locked or permalocked
-                return lockStatus.KillPasswordLockState != LockState.Unlocked ||
-                       lockStatus.AccessPasswordLockState != LockState.Unlocked ||
-                       lockStatus.EpcLockState != LockState.Unlocked ||
-                       lockStatus.UserMemoryLockState != LockState.Unlocked;
-            }
-
-            // If we don't have cached lock status, we can't determine lock state
-            // You could return a default or throw an exception here
-            return false;
-        }
-
-        /// <summary>
-        /// Checks if a specific memory bank is locked for a tag with the given TID
-        /// </summary>
-        /// <param name="tid">TID of the tag to check</param>
-        /// <param name="memoryBank">Memory bank to check (Kill Password, Access Password, EPC, or User Memory)</param>
-        /// <returns>The lock state of the specified memory bank, or Unlocked if unknown</returns>
-        public LockState GetMemoryBankLockState(string tid, MemoryBank memoryBank)
-        {
-            if (string.IsNullOrEmpty(tid))
-                return LockState.Unlocked;
-
-            // Check if we have cached lock status for this TID
-            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
-            {
-                switch (memoryBank)
-                {
-                    case MemoryBank.Reserved:
-                        // For Reserved, we'll check the access password section
-                        return lockStatus.AccessPasswordLockState;
-                    case MemoryBank.Epc:
-                        return lockStatus.EpcLockState;
-                    case MemoryBank.Tid:
-                        // TID is typically permalocked by manufacturer
-                        return LockState.Permalocked;
-                    case MemoryBank.User:
-                        return lockStatus.UserMemoryLockState;
-                    default:
-                        return LockState.Unlocked;
-                }
-            }
-
-            // If we don't have cached lock status, we can't determine lock state
-            return LockState.Unlocked;
-        }
-
-        /// <summary>
-        /// Checks if the EPC memory bank is locked for a tag with the given TID
-        /// </summary>
-        /// <param name="tid">TID of the tag to check</param>
-        /// <returns>True if the EPC memory bank is locked or permalocked, false otherwise</returns>
-        public bool IsEpcLocked(string tid)
-        {
-            if (string.IsNullOrEmpty(tid))
-                return false;
-
-            // Check if we have cached lock status for this TID
-            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
-            {
-                return lockStatus.EpcLockState != LockState.Unlocked;
-            }
-
-            // If we don't have cached lock status, we can't determine lock state
-            return false;
-        }
-
-        /// <summary>
-        /// Checks if the EPC memory bank is permalocked for a tag with the given TID
-        /// </summary>
-        /// <param name="tid">TID of the tag to check</param>
-        /// <returns>True if the EPC memory bank is permalocked, false otherwise</returns>
-        public bool IsEpcPermalocked(string tid)
-        {
-            if (string.IsNullOrEmpty(tid))
-                return false;
-
-            // Check if we have cached lock status for this TID
-            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus lockStatus))
-            {
-                return lockStatus.EpcLockState == LockState.Permalocked;
-            }
-
-            // If we don't have cached lock status, we can't determine lock state
-            return false;
-        }
-
-        /// <summary>
-        /// Updates the cached lock status for a tag
-        /// </summary>
-        /// <param name="tid">TID of the tag</param>
-        /// <param name="lockStatus">Lock status information</param>
-        public void UpdateTagLockStatus(string tid, TagLockStatus lockStatus)
-        {
-            if (!string.IsNullOrEmpty(tid) && lockStatus != null)
-            {
-                _tagLockStatusCache[tid] = lockStatus;
-            }
-        }
-
-
-        /// <summary>
-        /// Gets tag lock status by reading reserved memory and analyzing lock bits
-        /// </summary>
-        public void GetTagLockStatus(Tag tag, ImpinjReader reader, Action<TagLockStatus> callback)
-        {
-            if (tag == null || reader == null || !reader.IsConnected)
-                return;
-
-            string tid = tag.Tid?.ToHexString() ?? string.Empty;
-            if (string.IsNullOrEmpty(tid))
-            {
-                callback?.Invoke(null);
-                return;
-            }
-
-            // Check if we already have this in cache
-            if (_tagLockStatusCache.TryGetValue(tid, out TagLockStatus cachedStatus))
-            {
-                callback?.Invoke(cachedStatus);
-                return;
-            }
-
-            try
-            {
-                // Create a tag operation sequence
-                TagOpSequence seq = new TagOpSequence();
-                seq.TargetTag = new TargetTag();
-                seq.TargetTag.MemoryBank = MemoryBank.Epc;
-                seq.TargetTag.BitPointer = BitPointers.Epc;
-                seq.TargetTag.Data = tag.Epc.ToHexString();
-
-                // Create a tag read operation to read reserved memory (words 4-5)
-                TagReadOp readReservedMem = new TagReadOp();
-                readReservedMem.MemoryBank = MemoryBank.Reserved;
-                readReservedMem.WordPointer = 4; // Reading from word 4
-                readReservedMem.WordCount = 2;   // Reading 2 words (words 4 and 5)
-
-                // Add the operation to sequence
-                seq.Ops.Add(readReservedMem);
-
-                // Create the handler that matches the TagOpCompleteHandler delegate signature
-                TagOpCompleteHandler handler = null;
-                handler = (ImpinjReader sender, TagOpReport report) =>
-                {
-                    reader.TagOpComplete -= handler;
-                    reader.Stop();
-
-                    foreach (TagOpResult result in report)
-                    {
-                        if (result is TagReadOpResult readResult)
-                        {
-                            if (readResult.Result == ReadResultStatus.Success)
-                            {
-                                uint lockBits = readResult.Data.ToUnsignedInt();
-                                TagLockStatus lockStatus = ProcessLockBits(lockBits, GetChipModel(readResult.Tag));
-
-                                // Update the cache with the new lock status
-                                if (lockStatus != null)
-                                {
-                                    UpdateTagLockStatus(tid, lockStatus);
-                                }
-
-                                callback?.Invoke(lockStatus);
-                                return;
-                            }
-                        }
-                    }
-                    callback?.Invoke(null);
-                };
-
-                // Register the handler and start the reader
-                reader.TagOpComplete += handler;
-                reader.AddOpSequence(seq);
-                reader.Start();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error getting tag lock status: {ex.Message}");
-                callback?.Invoke(null);
-            }
-        }
-
-        /// <summary>
-        /// Process lock bits to determine lock status of various memory banks
-        /// </summary>
-        private TagLockStatus ProcessLockBits(uint lockBits, TagType tagType)
-    {
-        TagLockStatus status = new TagLockStatus();
-
-        // Check Kill Password lock status
-        bool killPasswordLockBit = false;
-        bool killPasswordPermalockBit = false;
-
-        switch (tagType)
-        {
-            case TagType.GenericMonza:
-            case TagType.MonzaR6:
-                killPasswordLockBit = IsBitSet(lockBits, KillPasswordLockBit);
-                killPasswordPermalockBit = IsBitSet(lockBits, KillPasswordPermalockBit);
-                break;
-            case TagType.M7xx:
-                killPasswordLockBit = IsBitSet(lockBits, M7xxKillPasswordLockBit);
-                killPasswordPermalockBit = IsBitSet(lockBits, M7xxKillPasswordPermalockBit);
-                break;
-        }
-
-        if (killPasswordPermalockBit)
-            status.KillPasswordLockState = LockState.Permalocked;
-        else if (killPasswordLockBit)
-            status.KillPasswordLockState = LockState.Locked;
-        else
-            status.KillPasswordLockState = LockState.Unlocked;
-
-        // Check Access Password lock status
-        bool accessPasswordLockBit = IsBitSet(lockBits, AccessPasswordLockBit);
-        bool accessPasswordPermalockBit = IsBitSet(lockBits, AccessPasswordPermalockBit);
-
-        if (accessPasswordPermalockBit)
-            status.AccessPasswordLockState = LockState.Permalocked;
-        else if (accessPasswordLockBit)
-            status.AccessPasswordLockState = LockState.Locked;
-        else
-            status.AccessPasswordLockState = LockState.Unlocked;
-
-        // Check EPC lock status
-        bool epcLockBit = false;
-        bool epcPermalockBit = false;
-
-        switch (tagType)
-        {
-            case TagType.GenericMonza:
-            case TagType.M7xx:
-                epcLockBit = IsBitSet(lockBits, EPCLockBit);
-                epcPermalockBit = IsBitSet(lockBits, EPCPermalockBit);
-                break;
-            case TagType.MonzaR6:
-                // For Monza R6, some bits are in word 5
-                epcLockBit = IsBitSet(lockBits, MR6EPCLockBit);
-                epcPermalockBit = IsBitSet(lockBits, MR6PermalockBit);
-                break;
-        }
-
-        if (epcPermalockBit)
-            status.EpcLockState = LockState.Permalocked;
-        else if (epcLockBit)
-            status.EpcLockState = LockState.Locked;
-        else
-            status.EpcLockState = LockState.Unlocked;
-
-        // Check User Memory lock status
-        bool userMemoryLockBit = IsBitSet(lockBits, UserMemoryLockBit);
-        bool userMemoryPermalockBit = IsBitSet(lockBits, UserMemoryPermalockBit);
-
-        if (userMemoryPermalockBit)
-            status.UserMemoryLockState = LockState.Permalocked;
-        else if (userMemoryLockBit)
-            status.UserMemoryLockState = LockState.Locked;
-        else
-            status.UserMemoryLockState = LockState.Unlocked;
-
-        // Check if tag is killed
-        bool killBit = false;
-        switch (tagType)
-        {
-            case TagType.GenericMonza:
-            case TagType.MonzaR6:
-                killBit = IsBitSet(lockBits, KillBit);
-                break;
-            case TagType.M7xx:
-                killBit = IsBitSet(lockBits, M7xxKillBit);
-                break;
-        }
-        status.IsKilled = killBit;
-
-        return status;
-    }
-
-    /// <summary>
-    /// Helper method to check if a specific bit is set in a value
-    /// </summary>
-    private bool IsBitSet(uint value, int bitPosition)
-    {
-        return (value & (1u << bitPosition)) != 0;
-    }
-
 
         public void CleanUp()
         {
@@ -453,13 +81,12 @@ namespace OctaneTagWritingTest.Helpers
                     expectedEpcByTid.Clear();
                     operationResultByTid.Clear();
                     operationResultWithSuccessByTid.Clear();
+                    serialByTid.Clear();
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-
-
+                    Console.WriteLine($"Error during cleanup: {ex.Message}");
                 }
-
             }
         }
 
@@ -471,7 +98,7 @@ namespace OctaneTagWritingTest.Helpers
             }
         }
 
-        
+
 
         public void RecordExpectedEpc(string tid, string expectedEpc)
         {
@@ -513,14 +140,14 @@ namespace OctaneTagWritingTest.Helpers
 
                 if (wasSuccess)
                 {
-                    if(!operationResultWithSuccessByTid.ContainsKey(tid))
+                    if (!operationResultWithSuccessByTid.ContainsKey(tid))
                     {
                         operationResultWithSuccessByTid.TryAdd(tid, result);
                         Console.WriteLine($"RecordResult - Success count: TID: {tid} result: {result}");
                         Console.WriteLine($"Success count: [{operationResultWithSuccessByTid.Count()}]");
                     }
-                    
-                    
+
+
                 }
 
                 if (!operationResultByTid.ContainsKey(tid))
@@ -529,7 +156,7 @@ namespace OctaneTagWritingTest.Helpers
             }
         }
 
-        public string GetNextEpcForTag(string epc, string tid, string gtin, int companyPrefixLength = 6, EpcEncodingMethod encodingMethod = EpcEncodingMethod.BasicWithTidSuffix)
+        public string GetNextEpcForTag(string epc, string tid)
         {
             const int maxRetries = 5;
             int retryCount = 0;
@@ -540,15 +167,7 @@ namespace OctaneTagWritingTest.Helpers
                 do
                 {
                     // Get a new EPC from the manager.
-                    if(string.IsNullOrEmpty(epc))
-                    {
-                        nextEpc = EpcListManager.Instance.GetNextEpc(tid);
-                    }
-                    else
-                    {
-                        nextEpc = EpcListManager.Instance.CreateEpcWithCurrentDigits(epc, tid, _gtin ?? "99999999999999", companyPrefixLength, encodingMethod);
-                    }
-                    
+                    nextEpc = EpcListManager.Instance.CreateEpcWithCurrentDigits(epc, tid);
 
                     // If the EPC does not already exist, break out of the loop.
                     if (!GetExistingEpc(nextEpc))
@@ -560,14 +179,55 @@ namespace OctaneTagWritingTest.Helpers
                 }
                 while (retryCount < maxRetries);
 
-                // If after the maximum retries the EPC still exists, throw an exception.
+                // If after the maximum retries the EPC still exists, fall back to using SerialGenerator
                 if (GetExistingEpc(nextEpc))
                 {
-                    Console.WriteLine("WARNING DUP_EPC: Unable to generate a unique EPC after maximum retries.");
+                    Console.WriteLine("WARNING: EpcListManager failed to generate unique EPC, falling back to SerialGenerator");
+                    string serial = GetOrGenerateSerial(tid);
+                    // Format the serial as an EPC (maintaining the same format as the original EPC)
+                    nextEpc = FormatSerialAsEpc(serial, epc);
+
+                    // Verify the generated EPC is unique
+                    if (GetExistingEpc(nextEpc))
+                    {
+                        throw new InvalidOperationException("Failed to generate unique EPC even with SerialGenerator fallback");
+                    }
                 }
 
                 return nextEpc;
             }
+        }
+
+        /// <summary>
+        /// Formats a serial number as an EPC while preserving or defaulting to standard prefix
+        /// </summary>
+        /// <param name="serial">The serial number to format</param>
+        /// <param name="originalEpc">The original EPC to extract prefix from</param>
+        /// <returns>A properly formatted EPC string</returns>
+        private string FormatSerialAsEpc(string serial, string originalEpc)
+        {
+            // Default prefix if original EPC is invalid or too short
+            const string DEFAULT_PREFIX = "E280";  // Standard EPC prefix for SGTIN-96
+
+            // Validate and extract prefix from original EPC
+            string prefix;
+            if (string.IsNullOrEmpty(originalEpc) || originalEpc.Length < 4)
+            {
+                prefix = DEFAULT_PREFIX;
+                Console.WriteLine($"Warning: Invalid original EPC format, using default prefix {DEFAULT_PREFIX}");
+            }
+            else
+            {
+                // Verify the prefix is valid hexadecimal
+                prefix = originalEpc.Substring(0, 4);
+                if (!prefix.All(c => "0123456789ABCDEFabcdef".Contains(c)))
+                {
+                    prefix = DEFAULT_PREFIX;
+                    Console.WriteLine($"Warning: Invalid EPC prefix format (non-hexadecimal), using default prefix {DEFAULT_PREFIX}");
+                }
+            }
+
+            return $"{prefix}{serial}";
         }
 
 
@@ -682,7 +342,7 @@ namespace OctaneTagWritingTest.Helpers
         {
             try
             {
-                if(addedSequences.Count > 50)
+                if (addedSequences.Count > 50)
                 {
                     Console.WriteLine($"Cleaning-up Access Sequences {addedSequences.Count()}...");
                     reader.DeleteAllOpSequences();
@@ -694,7 +354,7 @@ namespace OctaneTagWritingTest.Helpers
             catch (Exception e)
             {
                 Console.WriteLine($"Warning while trying to clean-up {addedSequences} sequences");
-                
+
             }
 
         }
@@ -723,27 +383,27 @@ namespace OctaneTagWritingTest.Helpers
             }
 
             string oldEpc = tag.Epc.ToHexString();
-            
+
             // Take only the specified number of characters from the new EPC
             string partialNewEpc = newEpcToWrite.Substring(0, Math.Min(charactersToWrite, newEpcToWrite.Length));
-            
+
             // Keep the remaining characters from the old EPC
             string remainingOldEpc = oldEpc.Length > charactersToWrite ? oldEpc.Substring(charactersToWrite) : "";
-            
+
             // Set EPC data based on encoding choice
-            string epcData = encodeOrDefault 
-                ? partialNewEpc + remainingOldEpc 
+            string epcData = encodeOrDefault
+                ? partialNewEpc + remainingOldEpc
                 : $"B071000000000000000000{processedTids.Count:D2}";
 
             string currentTid = tag.Tid.ToHexString();
             Console.WriteLine($"TriggerPartialWriteAndVerify - Attempting partial write operation for TID {currentTid}: {oldEpc} -> {epcData} (Writing first {charactersToWrite} characters) - Read RSSI {tag.PeakRssiInDbm}");
-            
+
             TagOpSequence seq = new TagOpSequence();
             seq.SequenceStopTrigger = SequenceTriggerType.None;
             seq.TargetTag.MemoryBank = MemoryBank.Tid;
             seq.TargetTag.BitPointer = 0;
             seq.TargetTag.Data = currentTid;
-            
+
             if (useBlockWrite)
             {
                 seq.BlockWriteEnabled = true;
@@ -810,7 +470,7 @@ namespace OctaneTagWritingTest.Helpers
                     Console.WriteLine($" *************************************************************** ");
                 }
             }
-            
+
             Console.WriteLine($"TriggerPartialWriteAndVerify - Added Partial Write OpSequence {seq.Id} to TID {currentTid} - Current EPC: {oldEpc} -> Expected EPC {epcData}");
 
             RecordExpectedEpc(currentTid, epcData);
@@ -821,13 +481,10 @@ namespace OctaneTagWritingTest.Helpers
             if (cancellationToken.IsCancellationRequested) return;
 
             string oldEpc = tag.Epc.ToHexString();
-            // Set EPC data based on encoding choice.
             string epcData = encodeOrDefault ? newEpcToWrite : $"B071000000000000000000{processedTids.Count:D2}";
             string currentTid = tag.Tid.ToHexString();
-            //Console.WriteLine($"Attempting robust operation for TID {currentTid}: {oldEpc} -> {newEpcToWrite} - Read RSSI {tag.PeakRssiInDbm}");
-            
+
             TagOpSequence seq = new TagOpSequence();
-            //seq.AntennaId = targetAntennaPort;
             seq.SequenceStopTrigger = SequenceTriggerType.None;
             seq.TargetTag.MemoryBank = MemoryBank.Tid;
             seq.TargetTag.BitPointer = 0;
@@ -909,8 +566,8 @@ namespace OctaneTagWritingTest.Helpers
 
 
             //Console.WriteLine($"Added Write OpSequence {seq.Id} to TID {currentTid} - Current EPC: {oldEpc} -> Expected EPC {epcData}");
-            
-            
+
+
 
             RecordExpectedEpc(currentTid, epcData);
         }
@@ -1010,6 +667,15 @@ namespace OctaneTagWritingTest.Helpers
             LogToCsv(logFile, logLine);
         }
 
+        // Utility method to extract chip model information.
+        public string GetChipModel(Tag tag)
+        {
+            string chipModel = "";
+            if (tag.IsFastIdPresent)
+                chipModel = tag.ModelDetails.ModelName.ToString();
+            return chipModel;
+        }
+
         /// <summary>
         /// Appends a line to the CSV log file
         /// </summary>
@@ -1069,204 +735,6 @@ namespace OctaneTagWritingTest.Helpers
                 RecordResult(tidHex, resultStatus, resultStatus == "Success");
             }
         }
-
-        /// <summary>
-        /// Versão aprimorada de TriggerWriteAndVerify que também registra métricas de performance e inclui rastreamento adicional
-        /// </summary>
-        /// <param name="tag">O objeto Tag representando a tag RFID</param>
-        /// <param name="newEpcToWrite">O novo EPC a ser gravado na tag</param>
-        /// <param name="reader">O leitor RFID a ser usado para a operação</param>
-        /// <param name="cancellationToken">Token para cancelar a operação</param>
-        /// <param name="swWrite">O cronômetro para medir o tempo de gravação</param>
-        /// <param name="newAccessPassword">A senha de acesso para a tag</param>
-        /// <param name="encodeOrDefault">Se deve usar codificação específica ou valor padrão</param>
-        /// <param name="targetAntennaPort">A porta da antena a ser usada</param>
-        /// <param name="useBlockWrite">Se deve usar operações de escrita em bloco</param>
-        /// <param name="sequenceMaxRetries">Número máximo de retentativas para a sequência</param>
-        /// <returns>Um identificador de sequência para rastreamento da operação</returns>
-        public string TriggerWriteAndVerifyWithMetrics(Tag tag, string newEpcToWrite, ImpinjReader reader, CancellationToken cancellationToken, Stopwatch swWrite, string newAccessPassword, bool encodeOrDefault, ushort targetAntennaPort = 1, bool useBlockWrite = true, ushort sequenceMaxRetries = 5)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                return null;
-
-            string oldEpc = tag.Epc.ToHexString();
-            // Definir dados EPC com base na escolha de codificação
-            string epcData = encodeOrDefault ? newEpcToWrite : $"B071000000000000000000{processedTids.Count:D2}";
-            string currentTid = tag.Tid.ToHexString();
-
-            // Registrar detalhes para diagnóstico e rastreamento
-            Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Tentando operação robusta para TID {currentTid}: {oldEpc} -> {newEpcToWrite} - RSSI lido {tag.PeakRssiInDbm}");
-
-            // Criar a sequência de operação de tag
-            TagOpSequence seq = new TagOpSequence();
-            seq.SequenceStopTrigger = SequenceTriggerType.None;
-            seq.TargetTag.MemoryBank = MemoryBank.Tid;
-            seq.TargetTag.BitPointer = 0;
-            seq.TargetTag.Data = currentTid;
-
-            // Configurar escrita em bloco se habilitada
-            if (useBlockWrite)
-            {
-                seq.BlockWriteEnabled = true;
-                seq.BlockWriteWordCount = 2;
-                seq.BlockWriteRetryCount = 3;
-            }
-
-            // Configurar retentativas
-            if (sequenceMaxRetries > 0)
-            {
-                seq.SequenceStopTrigger = SequenceTriggerType.ExecutionCount;
-                seq.ExecutionCount = sequenceMaxRetries;
-            }
-            else
-            {
-                seq.SequenceStopTrigger = SequenceTriggerType.None;
-            }
-
-            // Criar operação de escrita
-            TagWriteOp writeOp = new TagWriteOp();
-            writeOp.AccessPassword = TagData.FromHexString(newAccessPassword);
-            writeOp.MemoryBank = MemoryBank.Epc;
-            writeOp.WordPointer = WordPointers.Epc;
-            writeOp.Data = TagData.FromHexString(epcData);
-
-            seq.Ops.Add(writeOp);
-
-            // Se o novo EPC tem comprimento diferente, atualizar os bits PC
-            if (oldEpc.Length != epcData.Length)
-            {
-                ushort newEpcLenWords = (ushort)(newEpcToWrite.Length / 4);
-                ushort newPcBits = PcBits.AdjustPcBits(tag.PcBits, newEpcLenWords);
-                Console.WriteLine($"Adicionando uma operação de escrita para alterar os bits PC de {tag.PcBits.ToString("X4")} para {newPcBits.ToString("X4")}");
-
-                TagWriteOp writePc = new TagWriteOp();
-                writePc.MemoryBank = MemoryBank.Epc;
-                writePc.Data = TagData.FromWord(newPcBits);
-                writePc.WordPointer = WordPointers.PcBits;
-                seq.Ops.Add(writePc);
-            }
-
-            // Registrar o ID da sequência para rastreamento
-            string sequenceId = seq.Id.ToString();
-
-            // Iniciar o cronômetro para medir o tempo de gravação
-            swWrite.Restart();
-
-            // Registrar a sequência para rastreamento
-            try
-            {
-                addedWriteSequences.TryAdd(sequenceId, tag.Tid.ToHexString());
-
-                // Registrar mais métricas aqui
-                RecordTagRead(); // Incrementar contagem de leituras para cálculo de taxa
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Aviso: Não foi possível rastrear a sequência de escrita: {ex.Message}");
-            }
-
-            // Limpar sequências se necessário para evitar sobrecarga
-            CheckAndCleanAccessSequencesOnReader(addedWriteSequences, reader);
-
-            // Adicionar a sequência ao leitor
-            try
-            {
-                reader.AddOpSequence(seq);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - ERRO: erro ao tentar adicionar sequência {sequenceId} para TID {currentTid}: {ex.Message}");
-                try
-                {
-                    Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Limpando sequências de acesso {addedWriteSequences.Count()}...");
-                    reader.DeleteAllOpSequences();
-                    addedWriteSequences.Clear();
-                    reader.AddOpSequence(seq);
-                    Console.WriteLine($" ********************* Sequências do leitor limpas *********************");
-                }
-                catch (Exception innerEx)
-                {
-                    Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Erro ao tentar limpar {addedWriteSequences.Count()} sequências: {innerEx.Message}");
-                    return null; // Retornar null indica falha
-                }
-            }
-
-            Console.WriteLine($"TriggerWriteAndVerifyWithMetrics - Adicionada OpSequence de escrita {sequenceId} para TID {currentTid} - EPC atual: {oldEpc} -> EPC esperado {epcData}");
-
-            // Registrar o EPC esperado para esta tag
-            RecordExpectedEpc(currentTid, epcData);
-
-            // Retornar o ID da sequência para referência
-            return sequenceId;
-        }
-
-        /// <summary>
-        /// Versão estendida do método HandleVerifiedTag que também registra métricas detalhadas para análise de performance
-        /// </summary>
-        /// <param name="tag">O objeto Tag representando a tag RFID</param>
-        /// <param name="tidHex">O TID da tag em formato hexadecimal</param>
-        /// <param name="expectedEpc">O EPC esperado após a gravação</param>
-        /// <param name="swWrite">O cronômetro usado para medir o tempo de gravação</param>
-        /// <param name="swVerify">O cronômetro usado para medir o tempo de verificação</param>
-        /// <param name="cycleCount">Dicionário para rastreamento de contagem de ciclos por TID</param>
-        /// <param name="currentTargetTag">A tag alvo original (pode ser a mesma que 'tag')</param>
-        /// <param name="chipModel">O modelo do chip da tag</param>
-        /// <param name="logFile">O caminho para o arquivo de log onde registrar os resultados</param>
-        public void HandleVerifiedTagWithMetrics(Tag tag, string tidHex, string expectedEpc, Stopwatch swWrite, Stopwatch swVerify, ConcurrentDictionary<string, int> cycleCount, Tag currentTargetTag, string chipModel, string logFile)
-        {
-            // Chamar o método base para manter a funcionalidade principal
-            HandleVerifiedTag(tag, tidHex, expectedEpc, swWrite, swVerify, cycleCount, currentTargetTag, chipModel, logFile);
-
-            // Registrar os tempos para métricas
-            RecordWriteTime(tidHex, swWrite.ElapsedMilliseconds);
-            RecordVerifyTime(tidHex, swVerify.ElapsedMilliseconds);
-
-            // Incrementar contadores para cálculo de taxas
-            RecordTagRead();
-
-            // Registrar métricas adicionais que podem ser úteis para análise
-            try
-            {
-                // Registrar informações do modelo do chip se disponíveis
-                if (!string.IsNullOrEmpty(chipModel))
-                {
-                    // Se temos um dicionário de métricas por modelo de chip, atualizar as contagens
-                    // Este é um exemplo - você pode precisar implementar esta estrutura de dados
-                    // _chipModelCounts.AddOrUpdate(chipModel, 1, (key, count) => count + 1);
-                }
-
-                // Registrar informações de RSSI se disponíveis
-                if (tag.IsPeakRssiInDbmPresent)
-                {
-                    double rssi = tag.PeakRssiInDbm;
-                    // Manter uma média móvel do RSSI ou outras estatísticas, se necessário
-                    // _averageRssi = (_averageRssi * (_totalProcessedCount - 1) + rssi) / _totalProcessedCount;
-                }
-
-                // Registrar informações de número de porta da antena, se disponíveis
-                if (tag.IsAntennaPortNumberPresent)
-                {
-                    ushort antennaPort = tag.AntennaPortNumber;
-                    // Rastrear estatísticas por porta de antena, se necessário
-                    // _antennaPortCounts.AddOrUpdate(antennaPort, 1, (key, count) => count + 1);
-                }
-
-                // Monitoramento de ciclos de retentativa
-                if (cycleCount != null && cycleCount.TryGetValue(tidHex, out int cycles))
-                {
-                    // Registrar métricas sobre tentativas necessárias para sucesso
-                    if (cycles > 1)
-                    {
-                        // _multiCycleSuccesses++;
-                        // _totalRetryCount += (cycles - 1);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // Registrar a exceção, mas não permitir que ela interrompa o fluxo
-                Console.WriteLine($"Warning: Error recording extended metrics: {ex.Message}");
-            }
-        }
     }
 }
+

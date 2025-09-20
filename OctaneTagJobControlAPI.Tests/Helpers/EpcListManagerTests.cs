@@ -16,131 +16,127 @@ namespace OctaneTagJobControlAPI.Tests.Helpers
         }
 
         [TestMethod]
-        public void GenerateEpc_WithSGTIN96_ProducesCorrectFormat()
+        public void CreateEpcWithCurrentDigits_WithValidInput_ProducesCorrectFormat()
         {
             // Arrange
+            string currentEpc = "B20099999999999ABCDEF1234";
             string tid = "E280116020123456789012";
-            string gtin = "7891033079360"; // 13-digit GTIN
-            int companyPrefixLength = 6;
 
             // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.SGTIN96);
+            string epc = _manager.CreateEpcWithCurrentDigits(currentEpc, tid);
 
             // Assert
             Assert.IsNotNull(epc);
             Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.Substring(tid.Length - 10)), "EPC should end with last 10 characters of TID");
+            
+            // Verify the first 14 characters are preserved from the header and item code
+            Assert.AreEqual(currentEpc.Substring(0, 14), epc.Substring(0, 14));
+            
+            // Verify the last 10 characters are from the TID serial
+            using (var parser = new OctaneTagWritingTest.Helpers.TagTidParser(tid))
+            {
+                string expectedSerial = parser.Get40BitSerialHex();
+                Assert.AreEqual(expectedSerial, epc.Substring(14));
+            }
         }
 
         [TestMethod]
-        public void GenerateEpc_With13DigitGTIN_PadsTo14Digits()
+        [ExpectedException(typeof(ArgumentException))]
+        public void CreateEpcWithCurrentDigits_WithInvalidEpcLength_ThrowsArgumentException()
         {
             // Arrange
+            string currentEpc = "B20099"; // Too short
             string tid = "E280116020123456789012";
-            string gtin = "7891033079360"; // 13-digit GTIN
-            int companyPrefixLength = 6;
 
             // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix);
-
-            // Assert
-            Assert.IsNotNull(epc);
-            Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.Substring(tid.Length - 10)), "EPC should end with last 10 characters of TID");
+            _manager.CreateEpcWithCurrentDigits(currentEpc, tid);
         }
 
         [TestMethod]
-        public void GenerateEpc_With15DigitGTIN_TrimsTo14Digits()
+        [ExpectedException(typeof(ArgumentException))]
+        public void CreateEpcWithCurrentDigits_WithEmptyTid_ThrowsArgumentException()
         {
             // Arrange
-            string tid = "E280116020123456789012";
-            string gtin = "789103307936012"; // 15-digit GTIN
-            int companyPrefixLength = 6;
+            string currentEpc = "B20099999999999ABCDEF1234";
+            string tid = "";
 
             // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix);
-
-            // Assert
-            Assert.IsNotNull(epc);
-            Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.Substring(tid.Length - 10)), "EPC should end with last 10 characters of TID");
+            _manager.CreateEpcWithCurrentDigits(currentEpc, tid);
         }
 
         [TestMethod]
-        public void GenerateEpc_WithShortTID_PadsTID()
+        public void CreateEpcWithCurrentDigits_WithDifferentTagModels_GeneratesCorrectEpc()
+        {
+            // Test with different tag models
+            var testCases = new[]
+            {
+                new { Tid = "E280119012345678AABB", Model = "Impinj Monza R6" },
+                new { Tid = "E280691512345678AABB", Model = "NXP UCODE 9" }
+            };
+
+            foreach (var testCase in testCases)
+            {
+                // Arrange
+                string currentEpc = "B20099999999999ABCDEF1234";
+
+                // Act
+                string epc = _manager.CreateEpcWithCurrentDigits(currentEpc, testCase.Tid);
+
+                // Assert
+                Assert.IsNotNull(epc);
+                Assert.AreEqual(24, epc.Length, $"EPC should be 24 characters long for {testCase.Model}");
+                
+                using (var parser = new OctaneTagWritingTest.Helpers.TagTidParser(testCase.Tid))
+                {
+                    string expectedSerial = parser.Get40BitSerialHex();
+                    Assert.AreEqual(expectedSerial, epc.Substring(14), 
+                        $"Serial extraction failed for {testCase.Model}");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void InitEpcData_SetsCorrectValues()
         {
             // Arrange
-            string tid = "E28011602012"; // Short TID
-            string gtin = "07891033079360"; // 14-digit GTIN
-            int companyPrefixLength = 6;
+            string header = "B200";
+            string code = "99999999999999";
+            long quantity = 100;
 
             // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix);
+            _manager.InitEpcData(header, code, quantity);
+
+            // Verify through CreateEpcWithCurrentDigits
+            string currentEpc = "000000000000000000000000";
+            string tid = "E280119012345678AABB";
+            string epc = _manager.CreateEpcWithCurrentDigits(currentEpc, tid);
 
             // Assert
-            Assert.IsNotNull(epc);
-            Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.PadLeft(10, '0').Substring(0, 10)), "EPC should end with padded TID");
+            Assert.IsTrue(epc.StartsWith(header));
+            Assert.IsTrue(epc.Substring(4, 14).StartsWith(code));
         }
 
         [TestMethod]
-        public void GenerateEpc_WhenSGTIN96Fails_FallsBackToBasicEncoding()
+        public void GetNextEpc_ReturnsUniqueEpcsForDifferentTids()
         {
             // Arrange
-            string tid = "E280116020123456789012";
-            string gtin = "INVALID_GTIN"; // Invalid GTIN to force fallback
-            int companyPrefixLength = 6;
+            string currentEpc = "B20099999999999ABCDEF1234";
+            var tids = new[]
+            {
+                "E280119012345678AABB",
+                "E280119087654321CCDD"
+            };
 
             // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.SGTIN96);
+            var epcs = new HashSet<string>();
+            foreach (var tid in tids)
+            {
+                string epc = _manager.GetNextEpc(currentEpc, tid);
+                epcs.Add(epc);
+            }
 
             // Assert
-            Assert.IsNotNull(epc);
-            Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.Substring(tid.Length - 10)), "EPC should end with last 10 characters of TID");
-        }
-
-        [TestMethod]
-        public void GenerateEpc_WithBasicEncoding_ProducesCorrectFormat()
-        {
-            // Arrange
-            string tid = "E280116020123456789012";
-            string gtin = "07891033079360"; // 14-digit GTIN
-            int companyPrefixLength = 6;
-
-            // Act
-            string epc = _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix);
-
-            // Assert
-            Assert.IsNotNull(epc);
-            Assert.AreEqual(24, epc.Length, "EPC should be 24 characters long");
-            Assert.IsTrue(epc.EndsWith(tid.Substring(tid.Length - 10)), "EPC should end with last 10 characters of TID");
-        }
-
-        [TestMethod]
-        public void GenerateEpc_WithNullGTIN_ThrowsArgumentException()
-        {
-            // Arrange
-            string tid = "E280116020123456789012";
-            string gtin = null;
-            int companyPrefixLength = 6;
-
-            // Act & Assert
-            Assert.ThrowsException<ArgumentException>(() => 
-                _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix));
-        }
-
-        [TestMethod]
-        public void GenerateEpc_WithNullTID_ThrowsArgumentException()
-        {
-            // Arrange
-            string tid = null;
-            string gtin = "07891033079360";
-            int companyPrefixLength = 6;
-
-            // Act & Assert
-            Assert.ThrowsException<ArgumentException>(() => 
-                _manager.GenerateEpc(tid, gtin, companyPrefixLength, EpcEncodingMethod.BasicWithTidSuffix));
+            Assert.AreEqual(tids.Length, epcs.Count, "Each TID should generate a unique EPC");
         }
     }
 }
